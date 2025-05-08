@@ -16,6 +16,7 @@ import {
   getUserReview,
   updateReviewLikes,
   type Review,
+  checkAuthenticationStatus,
 } from "@/app/actions/review-actions"
 import { useAuth } from "@/contexts/auth-context"
 import { AuthModal } from "@/components/auth/auth-modal"
@@ -42,7 +43,7 @@ export function ServiceReviews({
   serviceName,
   initialReplies = {},
 }: ServiceReviewsProps) {
-  const { user } = useAuth()
+  const { user, session, getSession, refreshSession, syncWithServer } = useAuth()
   const { toast } = useToast()
   const [reviewFilter, setReviewFilter] = useState("all")
   const [isPending, startTransition] = useTransition()
@@ -55,6 +56,8 @@ export function ServiceReviews({
   const [reviewCount, setReviewCount] = useState(initialCount)
   const formRef = useRef<HTMLFormElement>(null)
   const [reviewReplies, setReviewReplies] = useState<Record<number, ReviewReply[]>>(initialReplies)
+  const [isRefreshingSession, setIsRefreshingSession] = useState(false)
+  const [authDiagnostics, setAuthDiagnostics] = useState<any>(null)
 
   // Use refs to maintain stable references
   const reviewRepliesRef = useRef<Record<number, ReviewReply[]>>(initialReplies)
@@ -62,6 +65,7 @@ export function ServiceReviews({
   const isFetchingRef = useRef(false)
   const timeoutRef = useRef<NodeJS.Timeout | null>(null)
   const filterRef = useRef(reviewFilter)
+  const pendingInteractions = useRef(new Set<string>())
 
   // Track when the component has initialized
   const initializedRef = useRef(false)
@@ -92,6 +96,51 @@ export function ServiceReviews({
   const [reliabilityRating, setReliabilityRating] = useState(0)
   const [contentRating, setContentRating] = useState(0)
   const [valueRating, setValueRating] = useState(0)
+
+  // Helper function to validate current authentication
+  const ensureAuthentication = async () => {
+    if (!user) return false
+
+    try {
+      // First check if we have a valid session locally
+      if (!session) {
+        console.log("No session in context, checking for session")
+        const sessionResult = await getSession()
+        if (!sessionResult.success) {
+          console.warn("No valid session found")
+          setAuthModalOpen(true)
+          return false
+        }
+      }
+
+      // Check authentication status from server
+      const authStatus = await checkAuthenticationStatus()
+      setAuthDiagnostics(authStatus)
+
+      if (!authStatus.authenticated) {
+        console.warn("Authentication validation failed, prompting login")
+
+        // Try to sync with server first
+        const syncResult = await syncWithServer()
+        if (!syncResult.success) {
+          setAuthModalOpen(true)
+          return false
+        }
+
+        // Check again after sync
+        const retryAuthStatus = await checkAuthenticationStatus()
+        if (!retryAuthStatus.authenticated) {
+          setAuthModalOpen(true)
+          return false
+        }
+      }
+
+      return true
+    } catch (error) {
+      console.error("Error validating authentication:", error)
+      return false
+    }
+  }
 
   // Fetch reviews based on filter - this is a stable function that won't change
   const fetchReviews = useCallback(async () => {
@@ -227,8 +276,11 @@ export function ServiceReviews({
       if (user) {
         fetchUserReview()
       }
+
+      // Sync with server on initial load
+      syncWithServer()
     }
-  }, [fetchReviews, fetchUserReview, initialReviews.length, user])
+  }, [fetchReviews, fetchUserReview, initialReviews.length, user, syncWithServer])
 
   // Check for user's existing review when they log in
   useEffect(() => {
@@ -378,48 +430,221 @@ export function ServiceReviews({
     })
   }
 
+  // Handle session refresh
+  const handleSessionRefresh = async () => {
+    if (isRefreshingSession) return
+
+    setIsRefreshingSession(true)
+    try {
+      // First sync with server to ensure client and server are in agreement
+      const syncResult = await syncWithServer()
+
+      if (syncResult.success) {
+        // Then check local session
+        const sessionResult = await getSession()
+
+        if (sessionResult.success) {
+          // Check server-side authentication
+          const authStatus = await checkAuthenticationStatus()
+          setAuthDiagnostics(authStatus)
+
+          if (authStatus.authenticated) {
+            toast({
+              title: "Session Active",
+              description: "Your session is active and valid on both client and server.",
+            })
+          } else {
+            // Server says not authenticated
+            setAuthModalOpen(true)
+            toast({
+              title: "Server Authentication Failed",
+              description: "Server could not verify your session. Please log in again.",
+            })
+          }
+        } else {
+          // If no session, show auth modal
+          setAuthModalOpen(true)
+          toast({
+            title: "Session Expired",
+            description: "Please log in again to continue.",
+          })
+        }
+      } else {
+        // Server sync failed
+        setAuthModalOpen(true)
+        toast({
+          title: "Authentication Error",
+          description: syncResult.error || "Server could not verify your session. Please log in again.",
+        })
+      }
+    } catch (error) {
+      console.error("Error checking session:", error)
+      toast({
+        title: "Error",
+        description: "Failed to check your session status.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsRefreshingSession(false)
+    }
+  }
+
   // Handle like/dislike actions
   const handleReviewRating = async (reviewId: number, action: "like" | "dislike") => {
-    if (!user) {
+    // First, ensure the user is authenticated
+    if (!user || !user.id) {
+      console.log("Client: User not authenticated, showing auth modal")
       setAuthModalOpen(true)
       return
     }
 
-    // Optimistically update UI
-    setReviews((prevReviews) =>
-      prevReviews.map((review) => {
-        if (review.id === reviewId) {
-          return {
-            ...review,
-            likes: action === "like" ? review.likes + 1 : review.likes,
-            dislikes: action === "dislike" ? review.dislikes + 1 : review.dislikes,
-          }
+    // Track which reviews have been interacted with to prevent double-clicking
+    const interactionKey = `${reviewId}-${action}`
+    if (pendingInteractions.current.has(interactionKey)) {
+      console.log(`Ignoring duplicate ${action} request for review ${reviewId}`)
+      return
+    }
+
+    // Mark this interaction as pending to prevent duplicates
+    pendingInteractions.current.add(interactionKey)
+
+    try {
+      // Log the attempt with user details for debugging
+      console.log(`Client: Attempting to ${action} review ${reviewId} by user ${user.id}`)
+
+      // First check authentication status
+      const authStatus = await checkAuthenticationStatus()
+      console.log("Auth status check:", authStatus)
+      setAuthDiagnostics(authStatus)
+
+      if (!authStatus.authenticated) {
+        console.error("Client: Authentication validation failed:", authStatus.error)
+
+        // Try to refresh the session first
+        await refreshSession()
+
+        // Then sync with server
+        const syncResult = await syncWithServer()
+
+        if (!syncResult.success) {
+          toast({
+            title: "Authentication Error",
+            description: "Please log in again to continue.",
+            variant: "destructive",
+          })
+          setAuthModalOpen(true)
+          return
         }
-        return review
-      }),
-    )
 
-    // Send request to server
-    const result = await updateReviewLikes(reviewId, action)
+        // Try auth check again after refresh and sync
+        const retryAuthStatus = await checkAuthenticationStatus()
+        if (!retryAuthStatus.authenticated) {
+          toast({
+            title: "Authentication Error",
+            description: "Please log in again to continue.",
+            variant: "destructive",
+          })
+          setAuthModalOpen(true)
+          return
+        }
+      }
 
-    if (!mountedRef.current) return
+      // Optimistically update UI
+      setReviews((prevReviews) =>
+        prevReviews.map((review) => {
+          if (review.id === reviewId) {
+            // Only update the appropriate counter
+            if (action === "like") {
+              return {
+                ...review,
+                likes: review.likes + 1,
+              }
+            } else {
+              return {
+                ...review,
+                dislikes: review.dislikes + 1,
+              }
+            }
+          }
+          return review
+        }),
+      )
 
-    if (!result.success) {
-      // Only show auth modal if explicitly required and user is not authenticated
-      if (result.requireAuth && !user) {
-        setAuthModalOpen(true)
+      // Send request to server with timeout for safety
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Request timed out")), 10000))
+
+      const result = (await Promise.race([updateReviewLikes(reviewId, action), timeoutPromise])) as {
+        success: boolean
+        message: string
+        requireAuth?: boolean
+        alreadyInteracted?: boolean
+        currentInteraction?: string
+        diagnostics?: any
+      }
+
+      if (!mountedRef.current) return
+
+      // Update diagnostics if available
+      if (result.diagnostics) {
+        setAuthDiagnostics(result.diagnostics)
+      }
+
+      if (!result.success) {
+        console.error(`Client: Failed to ${action} review:`, result.message)
+
+        // If authentication is required, show auth modal
+        if (result.requireAuth) {
+          console.log("Server indicated auth is required, showing auth modal")
+          setAuthModalOpen(true)
+        } else {
+          // Show error toast
+          toast({
+            title: "Error",
+            description: result.message,
+            variant: "destructive",
+          })
+        }
+
+        // Reset the fetching flag to allow a new fetch to get the correct state
+        isFetchingRef.current = false
+        fetchReviews()
+      } else if (result.alreadyInteracted) {
+        // If the user already interacted but we didn't know it client-side,
+        // refresh the data to get the correct state
+        console.log(`Client: User already ${action}d review ${reviewId}, refreshing data`)
+        isFetchingRef.current = false
+        fetchReviews()
       } else {
-        // Otherwise show error toast and revert changes
+        console.log(`Client: Successfully ${action}d review ${reviewId}`)
+
+        // If we have information about the current interaction, update local state
+        if (result.currentInteraction) {
+          console.log(`Server confirmed interaction is now: ${result.currentInteraction}`)
+        }
+
+        // Show success toast
+        toast({
+          title: "Success",
+          description: `Your ${action} has been recorded.`,
+        })
+      }
+    } catch (error) {
+      console.error(`Client: Exception in ${action} handler:`, error)
+
+      if (mountedRef.current) {
         toast({
           title: "Error",
-          description: result.message,
+          description: "Failed to record your rating. Please try again.",
           variant: "destructive",
         })
 
-        // Reset the fetching flag to allow a new fetch
+        // Reset the UI by refreshing the data
         isFetchingRef.current = false
         fetchReviews()
       }
+    } finally {
+      // Remove this interaction from pending set
+      pendingInteractions.current.delete(interactionKey)
     }
   }
 
@@ -466,8 +691,16 @@ export function ServiceReviews({
   )
 
   // Handle auth modal success
-  const handleAuthSuccess = () => {
+  const handleAuthSuccess = async () => {
     setAuthModalOpen(false)
+
+    // Sync with server after successful authentication
+    await syncWithServer()
+
+    // Check authentication status
+    const authStatus = await checkAuthenticationStatus()
+    setAuthDiagnostics(authStatus)
+
     setShowReviewForm(true)
     // Show a message to the user that they can now submit their review
     setFormMessage({
@@ -629,8 +862,32 @@ export function ServiceReviews({
           <Button variant="outline" onClick={toggleReviewForm}>
             {showReviewForm && user ? "Cancel Review" : userReview ? "Edit Your Review" : "Write a Review"}
           </Button>
+          <Button variant="outline" size="sm" onClick={handleSessionRefresh} disabled={isRefreshingSession}>
+            {isRefreshingSession ? (
+              <>
+                <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                Checking...
+              </>
+            ) : (
+              "Check Session"
+            )}
+          </Button>
         </div>
       </div>
+
+      {/* Auth diagnostics for debugging */}
+      {authDiagnostics && (
+        <Alert className="bg-gray-50 border-gray-200 mb-4">
+          <AlertDescription>
+            <details>
+              <summary className="cursor-pointer text-sm font-medium">Auth Diagnostics</summary>
+              <pre className="mt-2 text-xs overflow-auto max-h-40 p-2 bg-gray-100 rounded">
+                {JSON.stringify(authDiagnostics, null, 2)}
+              </pre>
+            </details>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Only show form messages that are relevant to the current user state */}
       {formMessage && !(formMessage.text.includes("logged in") && user) && (

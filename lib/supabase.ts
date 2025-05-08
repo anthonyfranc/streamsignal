@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js"
 import type { Database } from "@/types/database"
 
-// Ensure environment variables are available and provide better error messages
+// Get environment variables with error checking
 const getSupabaseUrl = () => {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
   if (!url) {
@@ -22,53 +22,57 @@ const getSupabaseAnonKey = () => {
   return key
 }
 
+// Client-side singleton instance
+let clientInstance: ReturnType<typeof createClient<Database>> | null = null
+
 // Create a single supabase client for the browser
 const createBrowserClient = () => {
+  if (clientInstance) return clientInstance
+
   const supabaseUrl = getSupabaseUrl()
   const supabaseAnonKey = getSupabaseAnonKey()
 
-  return createClient<Database>(supabaseUrl, supabaseAnonKey, {
+  console.log("Creating new browser Supabase client instance")
+  clientInstance = createClient<Database>(supabaseUrl, supabaseAnonKey, {
     auth: {
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
     },
   })
+
+  return clientInstance
 }
 
-// Create a single supabase client for server components
-const createServerClient = () => {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+// Server-side singleton instance for client components
+let serverForClientInstance: ReturnType<typeof createClient<Database>> | null = null
 
-  if (!supabaseUrl || !supabaseServiceKey) {
-    console.error("Missing Supabase environment variables for server client:", {
-      hasUrl: !!supabaseUrl,
-      hasServiceKey: !!supabaseServiceKey,
-    })
+// Create a server client for use in client components
+const createServerForClientComponents = () => {
+  if (serverForClientInstance) return serverForClientInstance
 
-    // Return a placeholder client that will throw clear errors when used
-    return createClient("https://placeholder-url.supabase.co", "placeholder-key", {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    })
-  }
+  const supabaseUrl = getSupabaseUrl()
+  const supabaseAnonKey = getSupabaseAnonKey()
 
-  return createClient<Database>(supabaseUrl, supabaseServiceKey)
+  console.log("Creating new server-for-client Supabase client instance")
+  serverForClientInstance = createClient<Database>(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  })
+
+  return serverForClientInstance
 }
 
-// For client components
+// Export the singleton instances
 export const supabase = createBrowserClient()
-
-// For server components
-export const supabaseServer = createServerClient()
+export const supabaseServer = createServerForClientComponents()
 
 // Helper function to check Supabase connection
 export async function checkSupabaseConnection() {
   try {
-    const { data, error } = await supabaseServer.from("channels").select("count").limit(1)
+    const { data, error } = await supabase.from("channels").select("count").limit(1)
 
     if (error) {
       console.error("Supabase connection test failed:", error)

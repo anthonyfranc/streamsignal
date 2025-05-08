@@ -1,8 +1,8 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { createServerSupabaseClient } from "@/utils/supabase/server"
 import { cookies } from "next/headers"
+import { createServerClient } from "@/lib/supabase-server"
 
 // Define the Review type to match the actual database structure
 export interface Review {
@@ -22,11 +22,21 @@ export interface Review {
   created_at: string
 }
 
+// Interface for review interactions
+export interface ReviewInteraction {
+  id: number
+  review_id: number
+  user_id: string
+  interaction_type: "like" | "dislike"
+  created_at: string
+}
+
 // Function to get reviews for a service
 export async function getServiceReviews(serviceId: number, filter = "all"): Promise<Review[]> {
   try {
-    // Use the existing server Supabase client
-    const supabase = createServerSupabaseClient()
+    // Use the server Supabase client with cookies
+    const cookieStore = cookies()
+    const supabase = createServerClient(cookieStore)
 
     // Build the query
     let query = supabase
@@ -62,10 +72,50 @@ export async function getServiceReviews(serviceId: number, filter = "all"): Prom
   }
 }
 
+// Get user interactions for a set of reviews
+export async function getUserReviewInteractions(
+  userId: string,
+  reviewIds: number[],
+): Promise<Map<number, "like" | "dislike">> {
+  try {
+    if (!userId || !reviewIds.length) {
+      return new Map()
+    }
+
+    console.log(`Fetching interactions for user ${userId} and reviews:`, reviewIds)
+    const cookieStore = cookies()
+    const supabase = createServerClient(cookieStore)
+
+    const { data, error } = await supabase
+      .from("review_interactions")
+      .select("review_id, interaction_type")
+      .eq("user_id", userId)
+      .in("review_id", reviewIds)
+
+    if (error) {
+      console.error("Error fetching user review interactions:", error)
+      return new Map()
+    }
+
+    // Convert the array to a Map for easier lookup
+    const interactionsMap = new Map<number, "like" | "dislike">()
+    data.forEach((item) => {
+      interactionsMap.set(item.review_id, item.interaction_type as "like" | "dislike")
+    })
+
+    console.log(`Found ${interactionsMap.size} interactions for user ${userId}`)
+    return interactionsMap
+  } catch (error) {
+    console.error("Exception fetching user review interactions:", error)
+    return new Map()
+  }
+}
+
 // Function to get the total number of reviews for a service
 export async function getReviewCount(serviceId: number): Promise<number> {
   try {
-    const supabase = createServerSupabaseClient()
+    const cookieStore = cookies()
+    const supabase = createServerClient(cookieStore)
 
     const { count, error } = await supabase
       .from("service_reviews")
@@ -87,7 +137,8 @@ export async function getReviewCount(serviceId: number): Promise<number> {
 // Function to get a user's review for a specific service
 export async function getUserReview(serviceId: number, userId: string): Promise<Review | null> {
   try {
-    const supabase = createServerSupabaseClient()
+    const cookieStore = cookies()
+    const supabase = createServerClient(cookieStore)
 
     const { data, error } = await supabase
       .from("service_reviews")
@@ -112,6 +163,68 @@ export async function getUserReview(serviceId: number, userId: string): Promise<
   }
 }
 
+// New function to get user's interaction with a specific review
+export async function getUserReviewInteraction(reviewId: number, userId: string): Promise<"like" | "dislike" | null> {
+  try {
+    console.log(`Checking interaction for review ${reviewId} and user ${userId}`)
+    const cookieStore = cookies()
+    const supabase = createServerClient(cookieStore)
+
+    const { data, error } = await supabase
+      .from("review_interactions")
+      .select("interaction_type")
+      .eq("review_id", reviewId)
+      .eq("user_id", userId)
+      .single()
+
+    if (error) {
+      if (error.code === "PGRST116") {
+        // Not found
+        console.log(`No interaction found for review ${reviewId} and user ${userId}`)
+        return null
+      }
+      console.error("Error checking user review interaction:", error)
+      return null
+    }
+
+    console.log(`Found interaction for review ${reviewId} and user ${userId}:`, data.interaction_type)
+    return data.interaction_type as "like" | "dislike"
+  } catch (error) {
+    console.error("Exception checking user review interaction:", error)
+    return null
+  }
+}
+
+// Add this new function to check if a user has already liked a review
+export async function hasUserLikedReview(reviewId: number, userId: string): Promise<boolean> {
+  try {
+    const cookieStore = cookies()
+    const supabase = createServerClient(cookieStore)
+
+    const { data, error } = await supabase
+      .from("review_interactions")
+      .select("*")
+      .eq("review_id", reviewId)
+      .eq("user_id", userId)
+      .eq("interaction_type", "like")
+      .single()
+
+    if (error) {
+      if (error.code === "PGRST116") {
+        // Not found
+        return false
+      }
+      console.error("Error checking if user liked review:", error)
+      return false
+    }
+
+    return !!data
+  } catch (error) {
+    console.error("Exception checking if user liked review:", error)
+    return false
+  }
+}
+
 // Function to submit or update a service review
 export async function submitServiceReview(
   formData: FormData,
@@ -119,7 +232,7 @@ export async function submitServiceReview(
   try {
     // Create a new Supabase client for this request
     const cookieStore = cookies()
-    const supabase = createServerSupabaseClient()
+    const supabase = createServerClient(cookieStore)
 
     // Debug cookie information
     console.log(
@@ -339,57 +452,288 @@ export async function submitServiceReview(
   }
 }
 
-// Function to update likes/dislikes for a review
+// Helper function to diagnose authentication issues
+export async function checkAuthenticationStatus(): Promise<{
+  authenticated: boolean
+  userId?: string
+  error?: string
+  sessionData?: any
+  cookies?: string[]
+}> {
+  try {
+    const cookieStore = cookies()
+    const supabase = createServerClient(cookieStore)
+
+    // Log all available cookies for debugging
+    const allCookies = cookieStore.getAll()
+    const cookieNames = allCookies.map((c) => c.name)
+    console.log("[SERVER] Available cookies:", cookieNames)
+
+    // Check for specific auth cookies
+    const hasAuthCookie = cookieNames.some((name) => name.includes("auth") || name.includes("supabase"))
+    console.log("[SERVER] Has auth cookies:", hasAuthCookie)
+
+    console.log("[SERVER] Checking authentication status...")
+    const { data, error } = await supabase.auth.getSession()
+
+    if (error) {
+      console.error("[SERVER] Error checking auth status:", error)
+      return {
+        authenticated: false,
+        error: error.message,
+        cookies: cookieNames,
+      }
+    }
+
+    if (!data.session) {
+      console.log("[SERVER] No session found in auth check")
+      return {
+        authenticated: false,
+        error: "No session found",
+        cookies: cookieNames,
+      }
+    }
+
+    console.log(`[SERVER] Session found for user: ${data.session.user.id}`)
+    return {
+      authenticated: true,
+      userId: data.session.user.id,
+      sessionData: {
+        expires_at: data.session.expires_at,
+        last_refreshed_at: data.session.last_refreshed_at,
+      },
+      cookies: cookieNames,
+    }
+  } catch (err) {
+    console.error("[SERVER] Exception in checkAuthenticationStatus:", err)
+    return {
+      authenticated: false,
+      error: err instanceof Error ? err.message : String(err),
+    }
+  }
+}
+
+// Updated function to handle review likes/dislikes with proper tracking
 export async function updateReviewLikes(
   reviewId: number,
   action: "like" | "dislike",
-): Promise<{ success: boolean; message: string; requireAuth?: boolean }> {
+): Promise<{
+  success: boolean
+  message: string
+  requireAuth?: boolean
+  alreadyInteracted?: boolean
+  currentInteraction?: "like" | "dislike" | null
+  diagnostics?: any
+}> {
   try {
-    const supabase = createServerSupabaseClient()
+    console.log(`[SERVER] ========== START INTERACTION UPDATE ==========`)
+    console.log(`[SERVER] Processing ${action} for review ${reviewId}`)
+
+    // Get the cookie store
+    const cookieStore = cookies()
+    const supabase = createServerClient(cookieStore)
+
+    // Log all available cookies for debugging
+    const allCookies = cookieStore.getAll()
+    const cookieNames = allCookies.map((c) => c.name)
+    console.log("[SERVER] Available cookies for interaction:", cookieNames)
 
     // Get authentication status
     const {
       data: { session },
+      error: sessionError,
     } = await supabase.auth.getSession()
 
-    if (!session) {
+    if (sessionError) {
+      console.error("[SERVER] Error getting session:", sessionError)
+      return {
+        success: false,
+        message: "Authentication error. Please try logging in again.",
+        requireAuth: true,
+        diagnostics: { sessionError },
+      }
+    }
+
+    // Check if user is authenticated
+    if (!session || !session.user) {
+      console.log("[SERVER] No valid session found during like/dislike action")
       return {
         success: false,
         message: "You must be logged in to rate reviews.",
         requireAuth: true,
+        diagnostics: { cookieNames },
       }
     }
 
     const userId = session.user.id
+    console.log(`[SERVER] User ID from session: ${userId}`)
 
-    // Get the current review
-    const { data: review, error: fetchError } = await supabase
+    // Verify the user ID is valid
+    if (!userId) {
+      console.log("[SERVER] Invalid user ID found in session")
+      return {
+        success: false,
+        message: "Invalid user authentication. Please try logging in again.",
+        requireAuth: true,
+      }
+    }
+
+    // STEP 1: Get review data and verify it exists
+    const { data: reviewData, error: reviewError } = await supabase
       .from("service_reviews")
-      .select("likes, dislikes, service_id")
+      .select("id, user_id, service_id, likes, dislikes")
       .eq("id", reviewId)
       .single()
 
-    if (fetchError) {
-      console.error("Error fetching review:", fetchError)
-      return { success: false, message: "Failed to update review rating" }
+    if (reviewError) {
+      console.error(`[SERVER] Error fetching review ${reviewId}:`, reviewError)
+      return {
+        success: false,
+        message: "Failed to find the specified review.",
+        diagnostics: { reviewError },
+      }
     }
 
-    // Update the likes or dislikes
-    const updateData = action === "like" ? { likes: (review.likes || 0) + 1 } : { dislikes: (review.dislikes || 0) + 1 }
+    // Check if this is a self-like
+    const isSelfLike = reviewData.user_id === userId
+    console.log(`[SERVER] Review owner: ${reviewData.user_id}, Self-like: ${isSelfLike ? "YES" : "NO"}`)
 
-    const { error: updateError } = await supabase.from("service_reviews").update(updateData).eq("id", reviewId)
+    // STEP 2: Check for existing interaction
+    const { data: existingInteractionData, error: existingInteractionError } = await supabase
+      .from("review_interactions")
+      .select("id, interaction_type, created_at")
+      .eq("review_id", reviewId)
+      .eq("user_id", userId)
+      .maybeSingle()
 
-    if (updateError) {
-      console.error("Error updating review likes:", updateError)
-      return { success: false, message: "Failed to update review rating" }
+    if (existingInteractionError) {
+      console.error(`[SERVER] Error checking existing interaction:`, existingInteractionError)
+      // We continue even with an error, assuming no interaction exists
     }
 
-    // Revalidate the service page
-    revalidatePath(`/services/${review.service_id}`)
+    const existingInteraction = existingInteractionData?.interaction_type as "like" | "dislike" | null
+    console.log(`[SERVER] Existing interaction: ${existingInteraction || "NONE"}`)
 
-    return { success: true, message: "Rating updated successfully" }
+    // If user has already performed the same action, prevent duplicate
+    if (existingInteraction === action) {
+      console.log(`[SERVER] User has already ${action}d this review - no change needed`)
+      return {
+        success: true, // Return success but with alreadyInteracted flag
+        message: `You have already ${action}d this review.`,
+        alreadyInteracted: true,
+        currentInteraction: existingInteraction,
+      }
+    }
+
+    // STEP 3: Handle the database updates directly to avoid relying on stored procedures
+
+    // Start with calculating the new counts
+    let newLikes = reviewData.likes || 0
+    let newDislikes = reviewData.dislikes || 0
+
+    // First adjust for removing previous interaction if any
+    if (existingInteraction) {
+      if (existingInteraction === "like") {
+        newLikes = Math.max(0, newLikes - 1)
+        console.log(`[SERVER] Removing previous like, new likes count: ${newLikes}`)
+      } else {
+        newDislikes = Math.max(0, newDislikes - 1)
+        console.log(`[SERVER] Removing previous dislike, new dislikes count: ${newDislikes}`)
+      }
+    }
+
+    // Then adjust for adding new interaction
+    if (action === "like") {
+      newLikes += 1
+      console.log(`[SERVER] Adding new like, final likes count: ${newLikes}`)
+    } else {
+      newDislikes += 1
+      console.log(`[SERVER] Adding new dislike, final dislikes count: ${newDislikes}`)
+    }
+
+    // Update the counts in the review record
+    const { error: updateCountsError } = await supabase
+      .from("service_reviews")
+      .update({
+        likes: newLikes,
+        dislikes: newDislikes,
+      })
+      .eq("id", reviewId)
+
+    if (updateCountsError) {
+      console.error(`[SERVER] Error updating review counts:`, updateCountsError)
+      return {
+        success: false,
+        message: "Failed to update the review counts.",
+        diagnostics: { updateCountsError },
+      }
+    }
+
+    console.log(`[SERVER] Successfully updated review counts`)
+
+    // Handle the interaction record - either update or insert
+    let interactionResult
+
+    if (existingInteractionData) {
+      // Update existing record
+      const { data, error } = await supabase
+        .from("review_interactions")
+        .update({
+          interaction_type: action,
+        })
+        .eq("id", existingInteractionData.id)
+        .select()
+
+      interactionResult = { data, error, method: "update" }
+    } else {
+      // Insert new record
+      const { data, error } = await supabase
+        .from("review_interactions")
+        .insert({
+          review_id: reviewId,
+          user_id: userId,
+          interaction_type: action,
+        })
+        .select()
+
+      interactionResult = { data, error, method: "insert" }
+    }
+
+    if (interactionResult.error) {
+      console.error(`[SERVER] Error ${interactionResult.method}ing interaction record:`, interactionResult.error)
+      return {
+        success: false,
+        message: `Failed to record your ${action}.`,
+        diagnostics: { interactionError: interactionResult.error },
+      }
+    }
+
+    console.log(`[SERVER] Successfully ${interactionResult.method}ed interaction record`)
+
+    // Revalidate the page
+    revalidatePath(`/services/${reviewData.service_id}`)
+
+    console.log(`[SERVER] ========== INTERACTION UPDATE COMPLETED SUCCESSFULLY ==========`)
+
+    return {
+      success: true,
+      message: `Your ${action} has been recorded.`,
+      currentInteraction: action,
+      diagnostics: {
+        review: reviewData,
+        interactionResult,
+        finalCounts: { likes: newLikes, dislikes: newDislikes },
+      },
+    }
   } catch (error) {
-    console.error("Error in updateReviewLikes:", error)
-    return { success: false, message: "An unexpected error occurred" }
+    console.error("[SERVER] Exception in updateReviewLikes:", error)
+    return {
+      success: false,
+      message: "An unexpected error occurred",
+      diagnostics: {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+    }
   }
 }
