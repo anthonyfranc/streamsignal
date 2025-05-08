@@ -12,6 +12,7 @@ type AuthContextType = {
   signUp: (email: string, password: string, metadata?: { [key: string]: any }) => Promise<{ error: any; data: any }>
   signOut: () => Promise<void>
   resetPassword: (email: string) => Promise<{ error: any }>
+  refreshSession: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -20,6 +21,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+
+  // Function to refresh the session
+  const refreshSession = async () => {
+    try {
+      const { data, error } = await supabase.auth.refreshSession()
+      if (error) {
+        console.error("Error refreshing session:", error)
+      } else if (data.session) {
+        setSession(data.session)
+        setUser(data.session.user)
+      }
+    } catch (error) {
+      console.error("Exception refreshing session:", error)
+    }
+  }
 
   useEffect(() => {
     // Get session from storage
@@ -33,12 +49,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
+      console.log("Auth state changed:", _event, !!session)
       setSession(session)
       setUser(session?.user ?? null)
       setIsLoading(false)
     })
 
-    return () => subscription.unsubscribe()
+    // Set up a timer to refresh the session periodically
+    const refreshTimer = setInterval(refreshSession, 10 * 60 * 1000) // Every 10 minutes
+
+    return () => {
+      subscription.unsubscribe()
+      clearInterval(refreshTimer)
+    }
   }, [])
 
   const signIn = async (email: string, password: string) => {
@@ -54,9 +77,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         data: metadata,
       },
     })
-
-    // We don't need to manually create a user profile anymore
-    // The database trigger will handle this automatically
 
     return { data, error }
   }
@@ -80,6 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signUp,
     signOut,
     resetPassword,
+    refreshSession,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

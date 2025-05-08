@@ -23,15 +23,25 @@ import { cn } from "@/lib/utils"
 import { motion, AnimatePresence } from "framer-motion"
 import { useToast } from "@/hooks/use-toast"
 import { ReviewsEmptyState } from "./reviews-empty-state"
+import { ReviewReplies } from "./review-replies"
+import { getReviewReplies } from "@/app/actions/reply-actions"
+import type { ReviewReply } from "@/types/reviews"
 
 interface ServiceReviewsProps {
   serviceId: number
   initialReviews?: Review[]
   initialCount?: number
   serviceName?: string
+  initialReplies?: Record<number, ReviewReply[]>
 }
 
-export function ServiceReviews({ serviceId, initialReviews = [], initialCount = 0, serviceName }: ServiceReviewsProps) {
+export function ServiceReviews({
+  serviceId,
+  initialReviews = [],
+  initialCount = 0,
+  serviceName,
+  initialReplies = {},
+}: ServiceReviewsProps) {
   const { user } = useAuth()
   const { toast } = useToast()
   const [reviewFilter, setReviewFilter] = useState("all")
@@ -44,6 +54,37 @@ export function ServiceReviews({ serviceId, initialReviews = [], initialCount = 
   const [userReview, setUserReview] = useState<Review | null>(null)
   const [reviewCount, setReviewCount] = useState(initialCount)
   const formRef = useRef<HTMLFormElement>(null)
+  const [reviewReplies, setReviewReplies] = useState<Record<number, ReviewReply[]>>(initialReplies)
+
+  // Use refs to maintain stable references
+  const reviewRepliesRef = useRef<Record<number, ReviewReply[]>>(initialReplies)
+  const mountedRef = useRef(true)
+  const isFetchingRef = useRef(false)
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const filterRef = useRef(reviewFilter)
+
+  // Track when the component has initialized
+  const initializedRef = useRef(false)
+
+  // Update refs when state changes
+  useEffect(() => {
+    reviewRepliesRef.current = reviewReplies
+    filterRef.current = reviewFilter
+  }, [reviewReplies, reviewFilter])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    // Set mounted flag for cleanup
+    mountedRef.current = true
+
+    return () => {
+      // Clear any pending timeouts
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current)
+      }
+      mountedRef.current = false
+    }
+  }, [])
 
   // Form state
   const [rating, setRating] = useState(0)
@@ -52,37 +93,105 @@ export function ServiceReviews({ serviceId, initialReviews = [], initialCount = 
   const [contentRating, setContentRating] = useState(0)
   const [valueRating, setValueRating] = useState(0)
 
-  // Fetch reviews based on filter
+  // Fetch reviews based on filter - this is a stable function that won't change
   const fetchReviews = useCallback(async () => {
-    setIsLoading(true)
+    // Prevent concurrent fetches
+    if (isFetchingRef.current || !mountedRef.current) {
+      console.log("Skipping fetch - already fetching or component unmounted")
+      return
+    }
+
     try {
-      const data = await getServiceReviews(serviceId, reviewFilter)
-      setReviews(data)
+      isFetchingRef.current = true
+      setIsLoading(true)
+
+      console.log(`Fetching reviews for service ${serviceId} with filter ${filterRef.current}`)
+      const data = await getServiceReviews(serviceId, filterRef.current)
+
+      if (!mountedRef.current) return
+
+      console.log(`Received ${data.length} reviews`)
+
+      // Only update if the data has changed
+      const currentReviewIds = reviews
+        .map((r) => r.id)
+        .sort()
+        .join(",")
+      const newReviewIds = data
+        .map((r) => r.id)
+        .sort()
+        .join(",")
+
+      if (currentReviewIds !== newReviewIds) {
+        console.log("Reviews changed, updating state")
+        setReviews(data)
+      } else {
+        console.log("Reviews unchanged, skipping update")
+      }
+
+      // Only fetch replies if we have reviews
+      if (data.length > 0) {
+        // Pre-fetch replies for all reviews to ensure they're available
+        const repliesPromises = data.map((review) => getReviewReplies(review.id))
+        const repliesResults = await Promise.all(repliesPromises)
+
+        if (!mountedRef.current) return
+
+        // Build a new replies object
+        const newReplies: Record<number, ReviewReply[]> = {}
+        data.forEach((review, index) => {
+          newReplies[review.id] = repliesResults[index]
+        })
+
+        // Only update if there are actual changes - use JSON.stringify for deep comparison
+        const currentRepliesJSON = JSON.stringify(reviewRepliesRef.current)
+        const newRepliesJSON = JSON.stringify(newReplies)
+
+        if (currentRepliesJSON !== newRepliesJSON) {
+          console.log("Replies changed, updating state")
+          setReviewReplies(newReplies)
+        } else {
+          console.log("Replies unchanged, skipping update")
+        }
+      }
     } catch (error) {
       console.error("Error fetching reviews:", error)
-      toast({
-        title: "Error",
-        description: "Failed to load reviews. Please try again.",
-        variant: "destructive",
-      })
+      if (mountedRef.current) {
+        toast({
+          title: "Error",
+          description: "Failed to load reviews. Please try again.",
+          variant: "destructive",
+        })
+      }
     } finally {
-      setIsLoading(false)
+      if (mountedRef.current) {
+        setIsLoading(false)
+      }
+      // Set a delay before allowing another fetch
+      timeoutRef.current = setTimeout(() => {
+        isFetchingRef.current = false
+      }, 5000) // 5 second cooldown between fetches
     }
-  }, [serviceId, reviewFilter, toast])
+  }, [serviceId, toast, reviews]) // Only depend on serviceId and toast
 
   // Fetch user's existing review if they're logged in
   const fetchUserReview = useCallback(async () => {
-    if (!user) {
+    if (!user || !mountedRef.current) {
       setUserReview(null)
       return
     }
 
     try {
+      console.log(`Fetching user review for service ${serviceId} and user ${user.id}`)
       const review = await getUserReview(serviceId, user.id)
+
+      if (!mountedRef.current) return
+
       setUserReview(review)
 
       // Pre-fill form if user has an existing review
       if (review) {
+        console.log("Pre-filling form with existing review data")
         setRating(review.rating)
         setInterfaceRating(review.interface_rating)
         setReliabilityRating(review.reliability_rating)
@@ -94,15 +203,39 @@ export function ServiceReviews({ serviceId, initialReviews = [], initialCount = 
     }
   }, [serviceId, user])
 
-  // Load reviews when component mounts or filter changes
+  // Initial data load - only run once on mount and when filter changes
   useEffect(() => {
-    fetchReviews()
-  }, [fetchReviews])
+    // Only fetch if not already fetching and component is mounted
+    if (!isFetchingRef.current && mountedRef.current) {
+      console.log(`Filter changed to ${reviewFilter}, triggering fetch`)
+      fetchReviews()
+    }
+  }, [reviewFilter, fetchReviews])
+
+  // One-time initialization
+  useEffect(() => {
+    if (!initializedRef.current && mountedRef.current) {
+      console.log("Component initialized, fetching initial data")
+      initializedRef.current = true
+
+      // If we have initial reviews, don't fetch again
+      if (initialReviews.length === 0) {
+        fetchReviews()
+      }
+
+      // Check for user review
+      if (user) {
+        fetchUserReview()
+      }
+    }
+  }, [fetchReviews, fetchUserReview, initialReviews.length, user])
 
   // Check for user's existing review when they log in
   useEffect(() => {
-    fetchUserReview()
-  }, [fetchUserReview])
+    if (user && mountedRef.current) {
+      fetchUserReview()
+    }
+  }, [user, fetchUserReview])
 
   // Clear form message when authentication state changes
   useEffect(() => {
@@ -172,6 +305,8 @@ export function ServiceReviews({ serviceId, initialReviews = [], initialCount = 
       try {
         const result = await submitServiceReview(formData)
 
+        if (!mountedRef.current) return
+
         if (result.success) {
           setFormMessage({ type: "success", text: result.message })
 
@@ -198,6 +333,8 @@ export function ServiceReviews({ serviceId, initialReviews = [], initialCount = 
           setShowReviewForm(false)
 
           // Refresh reviews to show the latest data
+          // Reset the fetching flag to allow a new fetch
+          isFetchingRef.current = false
           fetchReviews()
 
           // Show success toast
@@ -224,16 +361,19 @@ export function ServiceReviews({ serviceId, initialReviews = [], initialCount = 
         }
       } catch (error) {
         console.error("Error submitting review:", error)
-        setFormMessage({
-          type: "error",
-          text: error instanceof Error ? error.message : "An unexpected error occurred. Please try again.",
-        })
 
-        toast({
-          title: "Error",
-          description: "Failed to submit review. Please try again.",
-          variant: "destructive",
-        })
+        if (mountedRef.current) {
+          setFormMessage({
+            type: "error",
+            text: error instanceof Error ? error.message : "An unexpected error occurred. Please try again.",
+          })
+
+          toast({
+            title: "Error",
+            description: "Failed to submit review. Please try again.",
+            variant: "destructive",
+          })
+        }
       }
     })
   }
@@ -262,6 +402,8 @@ export function ServiceReviews({ serviceId, initialReviews = [], initialCount = 
     // Send request to server
     const result = await updateReviewLikes(reviewId, action)
 
+    if (!mountedRef.current) return
+
     if (!result.success) {
       // Only show auth modal if explicitly required and user is not authenticated
       if (result.requireAuth && !user) {
@@ -273,6 +415,9 @@ export function ServiceReviews({ serviceId, initialReviews = [], initialCount = 
           description: result.message,
           variant: "destructive",
         })
+
+        // Reset the fetching flag to allow a new fetch
+        isFetchingRef.current = false
         fetchReviews()
       }
     }
@@ -393,6 +538,79 @@ export function ServiceReviews({ serviceId, initialReviews = [], initialCount = 
     </motion.div>
   )
 
+  // Handle new reply added
+  const handleReplyAdded = (reviewId: number, reply: ReviewReply) => {
+    console.log(`New reply added to review ${reviewId}:`, reply)
+
+    // Update the reviewReplies state with the new reply
+    setReviewReplies((prev) => {
+      const currentReplies = [...(prev[reviewId] || [])]
+
+      // Check if the reply already exists
+      const existingIndex = currentReplies.findIndex((r) => r.id === reply.id)
+
+      if (existingIndex >= 0) {
+        // Replace existing reply
+        currentReplies[existingIndex] = reply
+      } else {
+        // Add new reply
+        currentReplies.push(reply)
+      }
+
+      return {
+        ...prev,
+        [reviewId]: currentReplies,
+      }
+    })
+  }
+
+  // Fetch replies for a review
+  const fetchRepliesForReview = async (reviewId: number) => {
+    try {
+      console.log(`Fetching replies for review ${reviewId}`)
+      const replies = await getReviewReplies(reviewId)
+
+      if (!mountedRef.current) return []
+
+      console.log(`Got ${replies.length} replies for review ${reviewId}`)
+
+      // Only update if we got a valid response and it's different from current state
+      if (Array.isArray(replies)) {
+        const currentReplies = reviewRepliesRef.current[reviewId] || []
+
+        // Check if the data is actually different
+        if (
+          JSON.stringify(replies.map((r) => r.id)) !== JSON.stringify(currentReplies.map((r) => r.id)) ||
+          replies.length !== currentReplies.length
+        ) {
+          setReviewReplies((prev) => ({
+            ...prev,
+            [reviewId]: replies,
+          }))
+        }
+      }
+
+      return replies
+    } catch (error) {
+      console.error("Error fetching replies:", error)
+      return []
+    }
+  }
+
+  // Manual refresh button handler
+  const handleManualRefresh = () => {
+    if (!isFetchingRef.current) {
+      console.log("Manual refresh triggered")
+      isFetchingRef.current = false // Reset the flag
+      fetchReviews()
+    } else {
+      toast({
+        title: "Please wait",
+        description: "Reviews are currently being refreshed",
+      })
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
@@ -404,9 +622,14 @@ export function ServiceReviews({ serviceId, initialReviews = [], initialCount = 
             <TabsTrigger value="negative">Negative</TabsTrigger>
           </TabsList>
         </Tabs>
-        <Button variant="outline" onClick={toggleReviewForm}>
-          {showReviewForm && user ? "Cancel Review" : userReview ? "Edit Your Review" : "Write a Review"}
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" size="icon" onClick={handleManualRefresh} disabled={isLoading}>
+            <Loader2 className={cn("h-4 w-4", isLoading && "animate-spin")} />
+          </Button>
+          <Button variant="outline" onClick={toggleReviewForm}>
+            {showReviewForm && user ? "Cancel Review" : userReview ? "Edit Your Review" : "Write a Review"}
+          </Button>
+        </div>
       </div>
 
       {/* Only show form messages that are relevant to the current user state */}
@@ -589,11 +812,25 @@ export function ServiceReviews({ serviceId, initialReviews = [], initialCount = 
                               <ThumbsDown className="h-3.5 w-3.5" />
                               <span>{review.dislikes}</span>
                             </button>
-                            <button className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-900 transition-colors">
+                            <button
+                              className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-900 transition-colors"
+                              onClick={() => fetchRepliesForReview(review.id)}
+                            >
                               <MessageSquare className="h-3.5 w-3.5" />
-                              <span>0 replies</span>
+                              <span>
+                                {reviewReplies[review.id]?.length || 0}{" "}
+                                {reviewReplies[review.id]?.length === 1 ? "reply" : "replies"}
+                              </span>
                             </button>
                           </div>
+
+                          {/* Review Replies Component */}
+                          <ReviewReplies
+                            reviewId={review.id}
+                            initialReplies={reviewReplies[review.id] || []}
+                            onAuthRequired={() => setAuthModalOpen(true)}
+                            onReplyAdded={handleReplyAdded}
+                          />
                         </div>
                       </div>
                     </CardContent>

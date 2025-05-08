@@ -18,6 +18,9 @@ import { FallbackImage } from "@/components/ui/fallback-image"
 import { Card, CardContent } from "@/components/ui/card"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { calculateServiceRatings } from "@/app/actions/rating-actions"
+import { getReviewReplies } from "@/app/actions/reply-actions"
+import type { ReviewReply } from "@/types/reviews"
+import { getServiceReviews, getReviewCount } from "@/app/actions/review-actions"
 
 interface ServicePageProps {
   params: {
@@ -96,6 +99,19 @@ export default async function ServicePage({ params }: ServicePageProps) {
 
   const contentTabLabel = getContentTabLabel()
   const showContentTab = shouldShowContentTab()
+
+  // Fetch initial reviews and their replies
+  const reviews = await getServiceReviews(service.id)
+  const reviewCount = await getReviewCount(service.id)
+
+  // Fetch initial replies for each review
+  const initialReplies: Record<number, ReviewReply[]> = {}
+  for (const review of reviews) {
+    const replies = await getReviewReplies(review.id)
+    if (replies.length > 0) {
+      initialReplies[review.id] = replies
+    }
+  }
 
   return (
     <div className="container px-4 py-8 md:px-6 md:py-12">
@@ -378,7 +394,13 @@ export default async function ServicePage({ params }: ServicePageProps) {
             </TabsContent>
 
             <TabsContent value="reviews" className="pt-6">
-              <ReviewsContainer serviceId={service.id} serviceName={service.name} />
+              <ReviewsContainer
+                serviceId={service.id}
+                initialReviews={reviews}
+                initialCount={reviewCount}
+                serviceName={service.name}
+                initialReplies={initialReplies}
+              />
             </TabsContent>
           </Tabs>
         </div>

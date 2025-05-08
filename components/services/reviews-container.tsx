@@ -1,5 +1,6 @@
 import { getServiceReviews, getReviewCount } from "@/app/actions/review-actions"
 import { ServiceReviews } from "./service-reviews"
+import { AuthDebugPanel } from "@/components/auth/auth-debug"
 
 interface ReviewsContainerProps {
   serviceId: number
@@ -11,12 +12,17 @@ export async function ReviewsContainer({ serviceId, serviceName }: ReviewsContai
   const initialReviews = await getServiceReviews(serviceId)
   const reviewCount = await getReviewCount(serviceId)
 
+  const isDevelopment = process.env.NODE_ENV === "development"
+
   return (
-    <ServiceReviews
-      serviceId={serviceId}
-      initialReviews={initialReviews}
-      initialCount={reviewCount}
-      serviceName={serviceName}
-    />
+    <>
+      {isDevelopment && <AuthDebugPanel />}
+      <ServiceReviews
+        serviceId={serviceId}
+        initialReviews={initialReviews}
+        initialCount={reviewCount}
+        serviceName={serviceName}
+      />
+    </>
   )
 }

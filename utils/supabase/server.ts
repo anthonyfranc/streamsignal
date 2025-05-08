@@ -27,7 +27,16 @@ export function createServerSupabaseClient() {
       // Pass cookies to the Supabase client
       cookies: {
         get(name) {
-          return cookieStore.get(name)?.value
+          const cookie = cookieStore.get(name)
+          return cookie?.value
+        },
+        set(name, value, options) {
+          // This won't be used in server components, but we need to provide it
+          // Server components can't set cookies directly from here
+        },
+        remove(name, options) {
+          // This won't be used in server components, but we need to provide it
+          // Server components can't remove cookies directly from here
         },
       },
     },
