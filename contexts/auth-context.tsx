@@ -25,12 +25,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Function to refresh the session
   const refreshSession = async () => {
     try {
+      console.log("Refreshing auth session...")
       const { data, error } = await supabase.auth.refreshSession()
       if (error) {
         console.error("Error refreshing session:", error)
       } else if (data.session) {
+        console.log("Session refreshed successfully")
         setSession(data.session)
         setUser(data.session.user)
+      } else {
+        console.warn("No session returned from refresh")
       }
     } catch (error) {
       console.error("Exception refreshing session:", error)
@@ -49,6 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
+      console.log("Auth state changed:", _event)
       setSession(session)
       setUser(session?.user ?? null)
       setIsLoading(false)

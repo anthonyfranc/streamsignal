@@ -25,11 +25,20 @@ export async function submitReviewReply(
       }
     }
 
+    // Log session info for debugging
+    console.log("Server action session user ID:", session.user.id)
+
     // Extract and validate data
     const reviewId = Number.parseInt(formData.get("reviewId") as string)
     const content = formData.get("content") as string
     const serviceId = Number.parseInt(formData.get("serviceId") as string)
     const parentId = formData.get("parentId") ? Number.parseInt(formData.get("parentId") as string) : null
+    const userId = formData.get("userId") as string
+
+    // Verify that the user ID in the form matches the session user ID
+    if (userId && userId !== session.user.id) {
+      console.warn("User ID mismatch:", { formUserId: userId, sessionUserId: session.user.id })
+    }
 
     // Get user's name from their profile
     let authorName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || ""

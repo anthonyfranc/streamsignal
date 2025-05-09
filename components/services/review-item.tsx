@@ -18,7 +18,6 @@ import type { Review, Reply } from "@/types/reviews"
 import { formatDistanceToNow } from "date-fns"
 import { AnimatePresence, motion } from "framer-motion"
 import { supabase } from "@/lib/supabase"
-import { useSupabaseRealtime } from "@/hooks/use-supabase-realtime"
 
 interface ReviewItemProps {
   review: Review
@@ -27,10 +26,11 @@ interface ReviewItemProps {
 }
 
 export function ReviewItem({ review, serviceId, replies: initialReplies }: ReviewItemProps) {
-  const { user, session } = useAuth()
+  const { user, session, refreshSession } = useAuth()
   const [replyingTo, setReplyingTo] = useState<{ id: number | null; name: string } | null>(null)
   const [authModalOpen, setAuthModalOpen] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [isPending, setIsPending] = useState(false)
   const [showReplies, setShowReplies] = useState(false)
   const [replyContent, setReplyContent] = useState("")
@@ -40,67 +40,139 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
   const newReplyRef = useRef<HTMLDivElement>(null)
   const [newReplyId, setNewReplyId] = useState<number | null>(null)
   const [retryCount, setRetryCount] = useState(0)
+  const [subscriptionStatus, setSubscriptionStatus] = useState<Record<string, string>>({})
 
   // Set up real-time subscription for replies to this review
-  useSupabaseRealtime<Reply>("review_replies", "*", { column: "review_id", value: review.id }, async (payload) => {
-    if (payload.new && payload.new.status === "approved") {
-      // For new replies, fetch the user profile
-      if (payload.eventType === "INSERT") {
-        const reply = payload.new
-        const replyWithProfile = { ...reply, user_profile: { avatar_url: null }, replies: [] }
+  const setupRealtimeSubscription = () => {
+    const replyChannel = supabase
+      .channel(`review_replies_${review.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "review_replies",
+          filter: `review_id=eq.${review.id}`,
+        },
+        async (payload) => {
+          if (payload.new && (payload.new as any).status === "approved") {
+            // For new replies, fetch the user profile
+            if (payload.eventType === "INSERT") {
+              const reply = payload.new as Reply
+              const replyWithProfile = { ...reply, user_profile: { avatar_url: null }, replies: [] }
 
-        if (reply.user_id) {
-          const { data: profileData } = await supabase
-            .from("user_profiles")
-            .select("avatar_url")
-            .eq("id", reply.user_id)
-            .single()
+              if (reply.user_id) {
+                const { data: profileData } = await supabase
+                  .from("user_profiles")
+                  .select("avatar_url")
+                  .eq("id", reply.user_id)
+                  .single()
 
-          if (profileData) {
-            replyWithProfile.user_profile = profileData
+                if (profileData) {
+                  replyWithProfile.user_profile = profileData
+                }
+              }
+
+              // Mark this as the newest reply for animation
+              setNewReplyId(reply.id)
+
+              // Update the local replies state based on parent_id
+              if (reply.parent_id === null) {
+                // Top-level reply
+                setLocalReplies((prev) => [...prev, replyWithProfile])
+              } else {
+                // Nested reply - update the thread structure
+                setLocalReplies((prev) => addNestedReply(prev, reply.parent_id!, replyWithProfile))
+              }
+
+              // Clear the new reply ID after animation
+              setTimeout(() => {
+                setNewReplyId(null)
+              }, 3000)
+            }
+            // For updated replies, update the local state
+            else if (payload.eventType === "UPDATE") {
+              setLocalReplies((prev) => updateReplyInThread(prev, (payload.new as Reply).id, payload.new as Reply))
+            }
+            // For deleted replies, remove from local state
+            else if (payload.eventType === "DELETE" && payload.old) {
+              setLocalReplies((prev) => removeReplyFromThread(prev, (payload.old as Reply).id))
+            }
           }
+        },
+      )
+      .subscribe((status) => {
+        console.log(`Realtime subscription to review_replies status: ${status}`)
+        setSubscriptionStatus((prev) => ({ ...prev, replies: status }))
+        if (status === "SUBSCRIBED") {
+          console.log(`Successfully subscribed to review_replies changes`)
+        } else if (status === "TIMED_OUT" || status === "CLOSED") {
+          // Try to reconnect after a delay
+          setTimeout(() => {
+            console.log("Attempting to reconnect to review_replies...")
+            replyChannel.subscribe()
+          }, 2000)
         }
+      })
 
-        // Mark this as the newest reply for animation
-        setNewReplyId(reply.id)
-
-        // Update the local replies state based on parent_id
-        if (reply.parent_id === null) {
-          // Top-level reply
-          setLocalReplies((prev) => [...prev, replyWithProfile])
-        } else {
-          // Nested reply - update the thread structure
-          setLocalReplies((prev) => addNestedReply(prev, reply.parent_id!, replyWithProfile))
+    // Set up real-time subscription for votes on this review
+    const voteChannel = supabase
+      .channel(`review_votes_${review.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "review_votes",
+          filter: `review_id=eq.${review.id}`,
+        },
+        (payload) => {
+          // We'll handle vote updates by fetching the latest counts
+          if (payload.eventType === "INSERT" || payload.eventType === "DELETE") {
+            fetchReviewVoteCounts()
+          }
+        },
+      )
+      .subscribe((status) => {
+        console.log(`Realtime subscription to review_votes status: ${status}`)
+        setSubscriptionStatus((prev) => ({ ...prev, votes: status }))
+        if (status === "SUBSCRIBED") {
+          console.log(`Successfully subscribed to review_votes changes`)
+        } else if (status === "TIMED_OUT" || status === "CLOSED") {
+          // Try to reconnect after a delay
+          setTimeout(() => {
+            console.log("Attempting to reconnect to review_votes...")
+            voteChannel.subscribe()
+          }, 2000)
         }
+      })
 
-        // Clear the new reply ID after animation
-        setTimeout(() => {
-          setNewReplyId(null)
-        }, 3000)
-      }
-      // For updated replies, update the local state
-      else if (payload.eventType === "UPDATE") {
-        setLocalReplies((prev) => updateReplyInThread(prev, payload.new.id, payload.new))
-      }
-      // For deleted replies, remove from local state
-      else if (payload.eventType === "DELETE" && payload.old) {
-        setLocalReplies((prev) => removeReplyFromThread(prev, payload.old.id))
-      }
+    return () => {
+      supabase.removeChannel(replyChannel)
+      supabase.removeChannel(voteChannel)
     }
-  })
+  }
 
-  // Set up real-time subscription for votes on this review
-  useSupabaseRealtime("review_votes", "*", { column: "review_id", value: review.id }, (payload) => {
-    // We'll handle vote updates by fetching the latest counts
-    if (payload.eventType === "INSERT" || payload.eventType === "DELETE") {
-      fetchReviewVoteCounts()
-    }
-  })
+  // Set up realtime subscriptions
+  useEffect(() => {
+    const cleanup = setupRealtimeSubscription()
+    return cleanup
+  }, [review.id])
 
   // Initialize with the provided replies
   useEffect(() => {
     setLocalReplies(initialReplies)
   }, [initialReplies])
+
+  // Clear success message after a delay
+  useEffect(() => {
+    if (successMessage) {
+      const timer = setTimeout(() => {
+        setSuccessMessage(null)
+      }, 3000)
+      return () => clearTimeout(timer)
+    }
+  }, [successMessage])
 
   // Fetch the latest vote counts for this review
   const fetchReviewVoteCounts = async () => {
@@ -182,8 +254,12 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
 
     setIsPending(true)
     setErrorMessage(null)
+    setSuccessMessage(null)
 
     try {
+      // Refresh the session before submitting
+      await refreshSession()
+
       // Create form data for submission
       const formData = new FormData()
       formData.append("serviceId", serviceId.toString())
@@ -194,13 +270,17 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
         formData.append("parentId", replyingTo.id.toString())
       }
 
+      // Add user information to help debug
+      formData.append("userId", user.id)
+      formData.append("userEmail", user.email || "")
+
       // Submit to server - the real-time subscription will handle the UI update
       const result = await submitReviewReply(formData)
 
       if (!result.success) {
         if (result.requireAuth && retryCount < 1) {
           // If the server says we need auth, refresh the session and try once more
-          await supabase.auth.refreshSession()
+          await refreshSession()
           setRetryCount(retryCount + 1)
           setErrorMessage("Please try submitting again")
         } else {
@@ -212,6 +292,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
         setReplyContent("")
         setReplyingTo(null)
         setRetryCount(0)
+        setSuccessMessage("Reply submitted successfully!")
 
         // Optimistically add the reply to the UI
         const newReply: Reply = {
@@ -500,6 +581,18 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
                 >
                   <Alert className="mb-4 bg-red-50 text-red-800 border-red-200">
                     <AlertDescription>{errorMessage}</AlertDescription>
+                  </Alert>
+                </motion.div>
+              )}
+              {successMessage && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <Alert className="mb-4 bg-green-50 text-green-800 border-green-200">
+                    <AlertDescription>{successMessage}</AlertDescription>
                   </Alert>
                 </motion.div>
               )}
