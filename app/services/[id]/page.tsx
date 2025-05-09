@@ -5,27 +5,26 @@ import { ArrowLeft, Check, Info, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { TabsContent } from "@/components/ui/tabs"
 import { Progress } from "@/components/ui/progress"
 import { getServiceById, getServiceChannelsById, getRelatedServices } from "@/app/actions/streaming-actions"
 import { getServiceTiers } from "@/app/actions/pricing-actions"
 import { getContentCategoriesWithItemsByServiceId, getAddonServicesByParentId } from "@/app/actions/content-actions"
 import { AdaptiveContentDisplay } from "@/components/services/adaptive-content-display"
 import { ConsolidatedPricingView } from "@/components/services/consolidated-pricing-view"
-import { ReviewsContainer } from "@/components/services/reviews-container"
+import { ServiceReviews } from "@/components/services/service-reviews"
 import { RelatedServices } from "@/components/services/related-services"
 import { FallbackImage } from "@/components/ui/fallback-image"
 import { Card, CardContent } from "@/components/ui/card"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { calculateServiceRatings } from "@/app/actions/rating-actions"
-import { getReviewReplies } from "@/app/actions/reply-actions"
-import type { ReviewReply } from "@/types/reviews"
-import { getServiceReviews, getReviewCount } from "@/app/actions/review-actions"
+import { PersistentTabs } from "@/components/services/persistent-tabs"
 
 interface ServicePageProps {
   params: {
     id: string
   }
+  searchParams?: { tab?: string }
 }
 
 export async function generateMetadata({ params }: ServicePageProps): Promise<Metadata> {
@@ -44,7 +43,7 @@ export async function generateMetadata({ params }: ServicePageProps): Promise<Me
   }
 }
 
-export default async function ServicePage({ params }: ServicePageProps) {
+export default async function ServicePage({ params, searchParams }: ServicePageProps) {
   const serviceId = Number.parseInt(params.id)
   const service = await getServiceById(serviceId)
 
@@ -100,19 +99,6 @@ export default async function ServicePage({ params }: ServicePageProps) {
   const contentTabLabel = getContentTabLabel()
   const showContentTab = shouldShowContentTab()
 
-  // Fetch initial reviews and their replies
-  const reviews = await getServiceReviews(service.id)
-  const reviewCount = await getReviewCount(service.id)
-
-  // Fetch initial replies for each review
-  const initialReplies: Record<number, ReviewReply[]> = {}
-  for (const review of reviews) {
-    const replies = await getReviewReplies(review.id)
-    if (replies.length > 0) {
-      initialReplies[review.id] = replies
-    }
-  }
-
   return (
     <div className="container px-4 py-8 md:px-6 md:py-12">
       <Link href="/#features" className="inline-flex items-center text-sm mb-8 hover:underline">
@@ -153,7 +139,7 @@ export default async function ServicePage({ params }: ServicePageProps) {
                   ))}
                 </div>
                 <span className="text-sm font-medium">{ratings.overall.toFixed(1)}</span>
-                <span className="text-sm text-gray-500">({ratings.reviewCount} reviews)</span>
+                <span className="text-sm text-gray-500">(324 reviews)</span>
               </div>
             </div>
           </div>
@@ -187,14 +173,12 @@ export default async function ServicePage({ params }: ServicePageProps) {
             </div>
           </div>
 
-          <Tabs defaultValue="overview" className="mb-12">
-            <TabsList className={`grid w-full ${showContentTab ? "grid-cols-4" : "grid-cols-3"}`}>
-              <TabsTrigger value="overview">Overview</TabsTrigger>
-              {showContentTab && <TabsTrigger value="content">{contentTabLabel}</TabsTrigger>}
-              <TabsTrigger value="pricing">Pricing</TabsTrigger>
-              <TabsTrigger value="reviews">Reviews</TabsTrigger>
-            </TabsList>
-
+          <PersistentTabs
+            defaultValue={searchParams?.tab || "overview"}
+            className="mb-12"
+            showContentTab={showContentTab}
+            contentTabLabel={contentTabLabel}
+          >
             <TabsContent value="overview" className="pt-6">
               <div className="space-y-8">
                 <Card>
@@ -307,7 +291,7 @@ export default async function ServicePage({ params }: ServicePageProps) {
                                   <Info className="h-3.5 w-3.5 text-gray-400" />
                                 </TooltipTrigger>
                                 <TooltipContent>
-                                  <p className="text-xs">Stream quality and service uptime</p>
+                                  <p className="text-xs">Stream quality, performance and service uptime</p>
                                 </TooltipContent>
                               </Tooltip>
                             </TooltipProvider>
@@ -394,15 +378,9 @@ export default async function ServicePage({ params }: ServicePageProps) {
             </TabsContent>
 
             <TabsContent value="reviews" className="pt-6">
-              <ReviewsContainer
-                serviceId={service.id}
-                initialReviews={reviews}
-                initialCount={reviewCount}
-                serviceName={service.name}
-                initialReplies={initialReplies}
-              />
+              <ServiceReviews serviceId={serviceId} />
             </TabsContent>
-          </Tabs>
+          </PersistentTabs>
         </div>
 
         <div className="space-y-8">

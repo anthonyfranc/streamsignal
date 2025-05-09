@@ -1,8 +1,7 @@
 import { createClient } from "@supabase/supabase-js"
 import type { Database } from "@/types/database"
-import { cookies } from "next/headers"
 
-// Create a Supabase client for server components with cookie handling
+// Simple function to create a Supabase client for server components
 export function createServerSupabaseClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseKey =
@@ -18,27 +17,9 @@ export function createServerSupabaseClient() {
     )
   }
 
-  // Get cookies for auth
-  const cookieStore = cookies()
-
   return createClient<Database>(supabaseUrl, supabaseKey, {
     auth: {
       persistSession: false,
-      // Pass cookies to the Supabase client
-      cookies: {
-        get(name) {
-          const cookie = cookieStore.get(name)
-          return cookie?.value
-        },
-        set(name, value, options) {
-          // This won't be used in server components, but we need to provide it
-          // Server components can't set cookies directly from here
-        },
-        remove(name, options) {
-          // This won't be used in server components, but we need to provide it
-          // Server components can't remove cookies directly from here
-        },
-      },
     },
   })
 }

@@ -1,360 +1,195 @@
 "use server"
-
-import { revalidatePath } from "next/cache"
-import { createServerSupabaseClient } from "@/utils/supabase/server"
-import type { ReviewReply } from "@/types/reviews"
+import { createServerClient } from "@/lib/supabase-server"
 import { cookies } from "next/headers"
+import type { Reply } from "@/types/reviews"
 
-// Get all replies for a specific review
-export async function getReviewReplies(reviewId: number): Promise<ReviewReply[]> {
-  try {
-    console.log(`Server: Fetching replies for review ${reviewId}`)
-    const supabase = createServerSupabaseClient()
-
-    const { data, error } = await supabase
-      .from("review_replies")
-      .select("*")
-      .eq("review_id", reviewId)
-      .order("created_at", { ascending: true })
-
-    if (error) {
-      console.error("Server: Error fetching review replies:", error)
-      return []
-    }
-
-    console.log(`Server: Found ${data?.length || 0} replies for review ${reviewId}`)
-    return data as ReviewReply[]
-  } catch (error) {
-    console.error("Server: Exception fetching review replies:", error)
-    return []
-  }
-}
-
-// Submit a new reply to a review
 export async function submitReviewReply(
   formData: FormData,
-): Promise<{ success: boolean; message: string; requireAuth?: boolean; reply?: ReviewReply }> {
+): Promise<{ success: boolean; message: string; requireAuth?: boolean; replyId?: number }> {
   try {
-    // Log cookies for debugging
+    // Create a Supabase client with the cookies
     const cookieStore = cookies()
-    const authCookie = cookieStore.get("sb-auth-token")
-    console.log("Server: Auth cookie present:", !!authCookie)
+    const supabase = createServerClient(cookieStore)
 
-    const supabase = createServerSupabaseClient()
-
-    // Get authentication status
+    // Check if user is authenticated
     const {
       data: { session },
-      error: sessionError,
     } = await supabase.auth.getSession()
 
-    if (sessionError) {
-      console.error("Server: Error getting session:", sessionError)
+    if (!session) {
       return {
         success: false,
-        message: "Authentication error. Please try logging in again.",
+        message: "You must be logged in to submit a reply",
         requireAuth: true,
       }
     }
 
-    // Extract form data
-    const reviewIdRaw = formData.get("reviewId")
+    // Extract and validate data
+    const reviewId = Number.parseInt(formData.get("reviewId") as string)
     const content = formData.get("content") as string
+    const serviceId = Number.parseInt(formData.get("serviceId") as string)
+    const parentId = formData.get("parentId") ? Number.parseInt(formData.get("parentId") as string) : null
 
-    if (!reviewIdRaw) {
-      return {
-        success: false,
-        message: "Missing review information.",
+    // Get user's name from their profile
+    let authorName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || ""
+
+    // If no name is found in metadata, try to get it from user_profiles
+    if (!authorName) {
+      const { data: profileData } = await supabase
+        .from("user_profiles")
+        .select("full_name")
+        .eq("id", session.user.id)
+        .single()
+
+      if (profileData && profileData.full_name) {
+        authorName = profileData.full_name
+      } else {
+        // Fallback to email username if no name is found
+        authorName = session.user.email?.split("@")[0] || "User"
       }
     }
 
-    const reviewId = Number.parseInt(reviewIdRaw as string)
-
-    if (isNaN(reviewId)) {
-      return {
-        success: false,
-        message: "Invalid review information.",
-      }
+    // Basic validation
+    if (!reviewId || isNaN(reviewId)) {
+      return { success: false, message: "Invalid review ID" }
     }
 
-    // Validate content
-    if (!content || content.trim().length < 3) {
-      return {
-        success: false,
-        message: "Reply content must be at least 3 characters long.",
-      }
+    if (!content || content.trim().length < 1) {
+      return { success: false, message: "Please provide reply content" }
     }
 
-    if (!session) {
-      console.log("Server: No session found in server action")
-
-      // Try to use the user ID from the form data as a fallback
-      const formUserId = formData.get("userId") as string | null
-
-      if (!formUserId) {
-        return {
-          success: false,
-          message: "You must be logged in to reply to reviews.",
-          requireAuth: true,
-        }
-      }
-
-      console.log("Server: Using user ID from form data:", formUserId)
-
-      // Continue with the user ID from form data
-      // This is a fallback mechanism when the server session is not available
-      const authorName = (formData.get("authorName") as string) || "Anonymous"
-
-      // Use service role client for this operation since we're bypassing auth
-      const serviceClient = createServerSupabaseClient()
-
-      // Insert the reply
-      const { data, error } = await serviceClient
+    // If parentId is provided, verify it exists and belongs to the same review
+    if (parentId) {
+      const { data: parentReply, error: parentError } = await supabase
         .from("review_replies")
-        .insert({
-          review_id: reviewId,
-          user_id: formUserId,
-          author_name: authorName,
-          content: content.trim(),
-          likes: 0,
-          dislikes: 0,
-        })
-        .select()
+        .select("review_id")
+        .eq("id", parentId)
         .single()
 
-      if (error) {
-        console.error("Server: Error submitting reply with fallback method:", error)
-        return {
-          success: false,
-          message: `Failed to submit your reply: ${error.message}`,
-        }
+      if (parentError || !parentReply) {
+        return { success: false, message: "Invalid parent reply" }
       }
 
-      console.log("Server: Reply submitted successfully with fallback method:", data)
-
-      // Get the service ID to revalidate the page
-      const { data: review } = await serviceClient
-        .from("service_reviews")
-        .select("service_id")
-        .eq("id", reviewId)
-        .single()
-
-      if (review) {
-        revalidatePath(`/services/${review.service_id}`)
-      }
-
-      return {
-        success: true,
-        message: "Your reply has been submitted successfully!",
-        reply: data as ReviewReply,
+      if (parentReply.review_id !== reviewId) {
+        return { success: false, message: "Parent reply does not belong to this review" }
       }
     }
 
-    // Normal flow with session
-    console.log("Server: Session found in server action:", session.user.id)
-
-    // Extract user data
-    const userId = session.user.id
-
-    // Get author name with fallbacks
-    let authorName = "Anonymous"
-
-    // Try multiple ways to get the user's name
-    if (session.user.user_metadata?.name) {
-      authorName = session.user.user_metadata.name as string
-    } else if (session.user.user_metadata?.full_name) {
-      authorName = session.user.user_metadata.full_name as string
-    } else if (session.user.email) {
-      authorName = session.user.email.split("@")[0] as string
-    }
-
-    console.log("Server: Submitting reply with user:", {
-      userId,
-      authorName,
-      reviewId,
-      contentLength: content.length,
-    })
-
-    // Insert the reply
-    const { data, error } = await supabase
+    // Insert reply into database
+    const { data: insertedReply, error } = await supabase
       .from("review_replies")
       .insert({
         review_id: reviewId,
-        user_id: userId,
+        parent_id: parentId,
+        user_id: session.user.id,
         author_name: authorName,
-        content: content.trim(),
+        content,
         likes: 0,
         dislikes: 0,
+        status: "approved", // Set to approved for immediate display
       })
       .select()
       .single()
 
     if (error) {
-      console.error("Server: Error submitting reply:", error)
-
-      // Check if this is an auth error
-      if (error.code === "42501" || error.message.includes("permission denied")) {
-        return {
-          success: false,
-          message: "Authentication error. Please try logging in again.",
-          requireAuth: true,
-        }
-      }
-
+      console.error("Error submitting reply:", error)
       return {
         success: false,
-        message: `Failed to submit your reply: ${error.message}`,
+        message: "Failed to submit reply. Please try again.",
       }
     }
 
-    console.log("Server: Reply submitted successfully:", data)
-
-    // Get the service ID to revalidate the page
-    const { data: review } = await supabase.from("service_reviews").select("service_id").eq("id", reviewId).single()
-
-    if (review) {
-      revalidatePath(`/services/${review.service_id}`)
-    }
+    // We don't need to revalidate the path anymore since we're using real-time updates
+    // This prevents the tab from resetting to the default
+    // if (serviceId && !isNaN(serviceId)) {
+    //   revalidatePath(`/services/${serviceId}`)
+    // }
 
     return {
       success: true,
       message: "Your reply has been submitted successfully!",
-      reply: data as ReviewReply,
+      replyId: insertedReply.id,
     }
   } catch (error) {
-    console.error("Server: Exception in submitReviewReply:", error)
+    console.error("Error in submitReviewReply:", error)
     return {
       success: false,
-      message:
-        error instanceof Error
-          ? `An error occurred: ${error.message}`
-          : "An unexpected error occurred. Please try again.",
+      message: "An unexpected error occurred. Please try again.",
     }
   }
 }
 
-// Update likes/dislikes for a reply
-export async function updateReplyLikes(
-  replyId: number,
-  action: "like" | "dislike",
-): Promise<{ success: boolean; message: string; requireAuth?: boolean }> {
+export async function getReviewReplies(reviewId: number): Promise<Reply[]> {
   try {
-    const supabase = createServerSupabaseClient()
+    const cookieStore = cookies()
+    const supabase = createServerClient(cookieStore)
 
-    // Get authentication status
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-
-    if (!session) {
-      return {
-        success: false,
-        message: "You must be logged in to rate replies.",
-        requireAuth: true,
-      }
-    }
-
-    // Get the current reply
-    const { data: reply, error: fetchError } = await supabase
+    // Fetch all approved replies for this review
+    const { data, error } = await supabase
       .from("review_replies")
-      .select("likes, dislikes, review_id")
-      .eq("id", replyId)
-      .single()
+      .select("*")
+      .eq("review_id", reviewId)
+      .eq("status", "approved")
+      .order("created_at", { ascending: true })
 
-    if (fetchError) {
-      console.error("Server: Error fetching reply:", fetchError)
-      return { success: false, message: "Failed to update reply rating" }
+    if (error) {
+      console.error("Error fetching replies:", error)
+      return []
     }
 
-    // Update the likes or dislikes
-    const updateData = action === "like" ? { likes: (reply.likes || 0) + 1 } : { dislikes: (reply.dislikes || 0) + 1 }
+    // For each reply, fetch the user profile
+    const repliesWithProfiles = await Promise.all(
+      data.map(async (reply) => {
+        if (reply.user_id) {
+          const { data: profileData } = await supabase
+            .from("user_profiles")
+            .select("avatar_url")
+            .eq("id", reply.user_id)
+            .single()
 
-    const { error: updateError } = await supabase.from("review_replies").update(updateData).eq("id", replyId)
+          return {
+            ...reply,
+            user_profile: profileData || { avatar_url: null },
+          }
+        }
+        return {
+          ...reply,
+          user_profile: { avatar_url: null },
+        }
+      }),
+    )
 
-    if (updateError) {
-      console.error("Server: Error updating reply likes:", updateError)
-      return { success: false, message: "Failed to update reply rating" }
-    }
+    // Organize replies into a threaded structure
+    const threadedReplies: Reply[] = []
+    const replyMap: Record<number, Reply> = {}
 
-    // Get the service ID to revalidate the page
-    if (reply.review_id) {
-      const { data: review } = await supabase
-        .from("service_reviews")
-        .select("service_id")
-        .eq("id", reply.review_id)
-        .single()
+    // First pass: create a map of all replies
+    repliesWithProfiles.forEach((reply) => {
+      replyMap[reply.id] = { ...reply, replies: [] }
+    })
 
-      if (review) {
-        revalidatePath(`/services/${review.service_id}`)
+    // Second pass: organize into parent-child relationships
+    repliesWithProfiles.forEach((reply) => {
+      if (reply.parent_id === null) {
+        // This is a top-level reply
+        threadedReplies.push(replyMap[reply.id])
+      } else {
+        // This is a child reply
+        if (replyMap[reply.parent_id]) {
+          if (!replyMap[reply.parent_id].replies) {
+            replyMap[reply.parent_id].replies = []
+          }
+          replyMap[reply.parent_id].replies!.push(replyMap[reply.id])
+        } else {
+          // If parent doesn't exist (shouldn't happen), add as top-level
+          threadedReplies.push(replyMap[reply.id])
+        }
       }
-    }
+    })
 
-    return { success: true, message: "Rating updated successfully" }
+    return threadedReplies
   } catch (error) {
-    console.error("Server: Error in updateReplyLikes:", error)
-    return { success: false, message: "An unexpected error occurred" }
-  }
-}
-
-// Delete a reply (only for the author or admin)
-export async function deleteReviewReply(replyId: number): Promise<{ success: boolean; message: string }> {
-  try {
-    const supabase = createServerSupabaseClient()
-
-    // Get authentication status
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-
-    if (!session) {
-      return {
-        success: false,
-        message: "You must be logged in to delete replies.",
-      }
-    }
-
-    // Get the reply to check ownership
-    const { data: reply, error: fetchError } = await supabase
-      .from("review_replies")
-      .select("user_id, review_id")
-      .eq("id", replyId)
-      .single()
-
-    if (fetchError) {
-      console.error("Server: Error fetching reply:", fetchError)
-      return { success: false, message: "Failed to find the reply" }
-    }
-
-    // Check if the user is the author
-    if (reply.user_id !== session.user.id) {
-      // TODO: Add admin check here if needed
-      return { success: false, message: "You can only delete your own replies" }
-    }
-
-    // Delete the reply
-    const { error: deleteError } = await supabase.from("review_replies").delete().eq("id", replyId)
-
-    if (deleteError) {
-      console.error("Server: Error deleting reply:", deleteError)
-      return { success: false, message: "Failed to delete the reply" }
-    }
-
-    // Get the service ID to revalidate the page
-    if (reply.review_id) {
-      const { data: review } = await supabase
-        .from("service_reviews")
-        .select("service_id")
-        .eq("id", reply.review_id)
-        .single()
-
-      if (review) {
-        revalidatePath(`/services/${review.service_id}`)
-      }
-    }
-
-    return { success: true, message: "Reply deleted successfully" }
-  } catch (error) {
-    console.error("Server: Error in deleteReviewReply:", error)
-    return { success: false, message: "An unexpected error occurred" }
+    console.error("Error in getReviewReplies:", error)
+    return []
   }
 }
