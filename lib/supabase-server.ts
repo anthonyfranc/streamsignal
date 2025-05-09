@@ -21,7 +21,8 @@ export function createServerClient(cookieStore?: ReturnType<typeof cookies>) {
     return createClient<Database>(supabaseUrl, supabaseKey, {
       cookies: {
         get(name: string) {
-          return cookieStore.get(name)?.value
+          const cookie = cookieStore.get(name)
+          return cookie?.value
         },
         set(name: string, value: string, options: any) {
           try {
@@ -38,11 +39,20 @@ export function createServerClient(cookieStore?: ReturnType<typeof cookies>) {
           }
         },
       },
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+      },
     })
   }
 
   // Otherwise, create a client without cookie handling
-  return createClient<Database>(supabaseUrl, supabaseKey)
+  return createClient<Database>(supabaseUrl, supabaseKey, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+    },
+  })
 }
 
 // Create a simple Supabase client for server components
@@ -60,4 +70,35 @@ export function getSupabase() {
   }
 
   return createClient(supabaseUrl, supabaseKey)
+}
+
+// Server-side version of the connection check that can use the service role key
+export async function checkSupabaseServerConnection() {
+  try {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+    if (!supabaseUrl || !supabaseKey) {
+      return {
+        success: false,
+        error: "Missing Supabase environment variables",
+      }
+    }
+
+    const serverClient = createClient(supabaseUrl, supabaseKey)
+    const { data, error } = await serverClient.from("channels").select("count").limit(1)
+
+    if (error) {
+      console.error("Supabase server connection test failed:", error)
+      return { success: false, error: error.message }
+    }
+
+    return { success: true, data }
+  } catch (error) {
+    console.error("Exception testing Supabase server connection:", error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error testing connection",
+    }
+  }
 }

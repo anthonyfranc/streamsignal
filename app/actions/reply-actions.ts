@@ -17,12 +17,16 @@ export async function submitReviewReply(
     } = await supabase.auth.getSession()
 
     if (!session) {
+      console.error("No session found in server action")
       return {
         success: false,
         message: "You must be logged in to submit a reply",
         requireAuth: true,
       }
     }
+
+    // Log session info for debugging
+    console.log("Session found:", session.user.id)
 
     // Extract and validate data
     const reviewId = Number.parseInt(formData.get("reviewId") as string)

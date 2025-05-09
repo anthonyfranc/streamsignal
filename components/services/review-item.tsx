@@ -27,7 +27,7 @@ interface ReviewItemProps {
 }
 
 export function ReviewItem({ review, serviceId, replies: initialReplies }: ReviewItemProps) {
-  const { user } = useAuth()
+  const { user, session } = useAuth()
   const [replyingTo, setReplyingTo] = useState<{ id: number | null; name: string } | null>(null)
   const [authModalOpen, setAuthModalOpen] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -169,7 +169,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
   const handleReplySubmit = async (event: React.FormEvent) => {
     event.preventDefault()
 
-    if (!user) {
+    if (!user || !session) {
       setAuthModalOpen(true)
       return
     }
@@ -193,15 +193,59 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
         formData.append("parentId", replyingTo.id.toString())
       }
 
+      // Add user information to help debug
+      formData.append("userId", user.id)
+      formData.append("userEmail", user.email || "")
+
       // Submit to server - the real-time subscription will handle the UI update
       const result = await submitReviewReply(formData)
 
       if (!result.success) {
-        setErrorMessage(`Failed to save reply: ${result.message}`)
+        if (result.requireAuth) {
+          // If the server says we need auth, refresh the session
+          await supabase.auth.refreshSession()
+          setErrorMessage("Session refreshed. Please try again.")
+        } else {
+          setErrorMessage(`Failed to save reply: ${result.message}`)
+        }
       } else {
         // Clear the form after successful submission
         setReplyContent("")
         setReplyingTo(null)
+
+        // Optimistically add the reply to the UI
+        const newReply: Reply = {
+          id: result.replyId || Math.random() * -1000, // Temporary ID if server didn't return one
+          review_id: review.id,
+          parent_id: replyingTo?.id || null,
+          user_id: user.id,
+          author_name: user.user_metadata?.full_name || user.email?.split("@")[0] || "User",
+          content: replyContent,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          likes: 0,
+          dislikes: 0,
+          status: "approved",
+          user_profile: {
+            avatar_url: user.user_metadata?.avatar_url || null,
+          },
+          replies: [],
+        }
+
+        // Add to local state
+        if (newReply.parent_id === null) {
+          setLocalReplies((prev) => [...prev, newReply])
+        } else {
+          setLocalReplies((prev) => addNestedReply(prev, newReply.parent_id!, newReply))
+        }
+
+        // Set as new reply for animation
+        setNewReplyId(newReply.id)
+
+        // Clear the new reply ID after animation
+        setTimeout(() => {
+          setNewReplyId(null)
+        }, 3000)
       }
     } catch (error) {
       console.error("Error submitting reply:", error)
