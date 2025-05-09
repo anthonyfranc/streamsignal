@@ -40,12 +40,20 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
   const newReplyRef = useRef<HTMLDivElement>(null)
   const [newReplyId, setNewReplyId] = useState<number | null>(null)
   const [retryCount, setRetryCount] = useState(0)
-  const [subscriptionStatus, setSubscriptionStatus] = useState<Record<string, string>>({})
+  const [channels, setChannels] = useState<any[]>([])
 
-  // Set up real-time subscription for replies to this review
-  const setupRealtimeSubscription = () => {
+  // Set up real-time subscriptions
+  useEffect(() => {
+    // Clean up any existing channels
+    channels.forEach((channel) => {
+      supabase.removeChannel(channel)
+    })
+
+    const newChannels = []
+
+    // Set up real-time subscription for replies to this review
     const replyChannel = supabase
-      .channel(`review_replies_${review.id}`)
+      .channel(`review_replies_${review.id}_${Date.now()}`)
       .on(
         "postgres_changes",
         {
@@ -103,7 +111,6 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
       )
       .subscribe((status) => {
         console.log(`Realtime subscription to review_replies status: ${status}`)
-        setSubscriptionStatus((prev) => ({ ...prev, replies: status }))
         if (status === "SUBSCRIBED") {
           console.log(`Successfully subscribed to review_replies changes`)
         } else if (status === "TIMED_OUT" || status === "CLOSED") {
@@ -115,9 +122,11 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
         }
       })
 
+    newChannels.push(replyChannel)
+
     // Set up real-time subscription for votes on this review
     const voteChannel = supabase
-      .channel(`review_votes_${review.id}`)
+      .channel(`review_votes_${review.id}_${Date.now()}`)
       .on(
         "postgres_changes",
         {
@@ -135,7 +144,6 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
       )
       .subscribe((status) => {
         console.log(`Realtime subscription to review_votes status: ${status}`)
-        setSubscriptionStatus((prev) => ({ ...prev, votes: status }))
         if (status === "SUBSCRIBED") {
           console.log(`Successfully subscribed to review_votes changes`)
         } else if (status === "TIMED_OUT" || status === "CLOSED") {
@@ -147,16 +155,15 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
         }
       })
 
-    return () => {
-      supabase.removeChannel(replyChannel)
-      supabase.removeChannel(voteChannel)
-    }
-  }
+    newChannels.push(voteChannel)
 
-  // Set up realtime subscriptions
-  useEffect(() => {
-    const cleanup = setupRealtimeSubscription()
-    return cleanup
+    setChannels(newChannels)
+
+    return () => {
+      newChannels.forEach((channel) => {
+        supabase.removeChannel(channel)
+      })
+    }
   }, [review.id])
 
   // Initialize with the provided replies
@@ -257,8 +264,16 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
     setSuccessMessage(null)
 
     try {
-      // Refresh the session before submitting
+      // Ensure we have a fresh session
       await refreshSession()
+
+      // Force a new auth token to be used
+      const { data: authData } = await supabase.auth.getSession()
+      if (!authData.session) {
+        setErrorMessage("Your session has expired. Please sign in again.")
+        setAuthModalOpen(true)
+        return
+      }
 
       // Create form data for submission
       const formData = new FormData()
@@ -270,22 +285,16 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
         formData.append("parentId", replyingTo.id.toString())
       }
 
-      // Add user information to help debug
-      formData.append("userId", user.id)
-      formData.append("userEmail", user.email || "")
-
       // Submit to server - the real-time subscription will handle the UI update
       const result = await submitReviewReply(formData)
 
       if (!result.success) {
-        if (result.requireAuth && retryCount < 1) {
-          // If the server says we need auth, refresh the session and try once more
-          await refreshSession()
-          setRetryCount(retryCount + 1)
-          setErrorMessage("Please try submitting again")
+        if (result.requireAuth) {
+          // If the server says we need auth, try to sign in again
+          setErrorMessage("Your session has expired. Please sign in again.")
+          setAuthModalOpen(true)
         } else {
           setErrorMessage(`Failed to save reply: ${result.message}`)
-          setRetryCount(0)
         }
       } else {
         // Clear the form after successful submission
@@ -374,9 +383,12 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
     }
   }
 
-  const handleAuthSuccess = () => {
+  const handleAuthSuccess = async () => {
     setAuthModalOpen(false)
     setShowReplies(true) // Show replies section after login
+
+    // Refresh the session after successful login
+    await refreshSession()
 
     // Focus the reply input after a short delay
     setTimeout(() => {
