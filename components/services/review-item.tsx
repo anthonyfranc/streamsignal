@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Card, CardContent } from "@/components/ui/card"
-import { submitReviewReply } from "@/app/actions/reply-actions"
 import { submitVote } from "@/app/actions/vote-actions"
 import { useAuth } from "@/contexts/auth-context"
 import { AuthModal } from "@/components/auth/auth-modal"
@@ -39,8 +38,19 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
   const replyInputRef = useRef<HTMLTextAreaElement>(null)
   const newReplyRef = useRef<HTMLDivElement>(null)
   const [newReplyId, setNewReplyId] = useState<number | null>(null)
-  const [retryCount, setRetryCount] = useState(0)
   const [channels, setChannels] = useState<any[]>([])
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+
+  // Check authentication status
+  useEffect(() => {
+    const checkAuth = async () => {
+      const { data } = await supabase.auth.getSession()
+      setIsAuthenticated(!!data.session)
+      console.log("Authentication check:", !!data.session ? "Authenticated" : "Not authenticated")
+    }
+
+    checkAuth()
+  }, [user, session])
 
   // Set up real-time subscriptions
   useEffect(() => {
@@ -275,6 +285,8 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
         return
       }
 
+      console.log("Submitting reply with auth:", !!authData.session)
+
       // Create form data for submission
       const formData = new FormData()
       formData.append("serviceId", serviceId.toString())
@@ -285,58 +297,77 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
         formData.append("parentId", replyingTo.id.toString())
       }
 
-      // Submit to server - the real-time subscription will handle the UI update
-      const result = await submitReviewReply(formData)
+      // Add optimistic reply to UI immediately
+      const optimisticReply: Reply = {
+        id: Math.random() * -1000, // Temporary negative ID
+        review_id: review.id,
+        parent_id: replyingTo?.id || null,
+        user_id: user.id,
+        author_name: user.user_metadata?.full_name || user.email?.split("@")[0] || "User",
+        content: replyContent,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        likes: 0,
+        dislikes: 0,
+        status: "approved",
+        user_profile: {
+          avatar_url: user.user_metadata?.avatar_url || null,
+        },
+        replies: [],
+      }
 
-      if (!result.success) {
-        if (result.requireAuth) {
-          // If the server says we need auth, try to sign in again
-          setErrorMessage("Your session has expired. Please sign in again.")
-          setAuthModalOpen(true)
-        } else {
-          setErrorMessage(`Failed to save reply: ${result.message}`)
-        }
+      // Add to local state
+      if (optimisticReply.parent_id === null) {
+        setLocalReplies((prev) => [...prev, optimisticReply])
+      } else {
+        setLocalReplies((prev) => addNestedReply(prev, optimisticReply.parent_id!, optimisticReply))
+      }
+
+      // Set as new reply for animation
+      setNewReplyId(optimisticReply.id)
+
+      // Submit directly to Supabase instead of using the server action
+      const { data: insertedReply, error } = await supabase
+        .from("review_replies")
+        .insert({
+          review_id: review.id,
+          parent_id: replyingTo?.id || null,
+          user_id: user.id,
+          author_name: user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0] || "User",
+          content: replyContent,
+          likes: 0,
+          dislikes: 0,
+          status: "approved", // Set to approved for immediate display
+        })
+        .select()
+        .single()
+
+      if (error) {
+        console.error("Error submitting reply:", error)
+        setErrorMessage(`Failed to save reply: ${error.message}`)
+
+        // Remove the optimistic reply
+        setLocalReplies((prev) => prev.filter((reply) => reply.id !== optimisticReply.id))
       } else {
         // Clear the form after successful submission
         setReplyContent("")
         setReplyingTo(null)
-        setRetryCount(0)
         setSuccessMessage("Reply submitted successfully!")
 
-        // Optimistically add the reply to the UI
-        const newReply: Reply = {
-          id: result.replyId || Math.random() * -1000, // Temporary ID if server didn't return one
-          review_id: review.id,
-          parent_id: replyingTo?.id || null,
-          user_id: user.id,
-          author_name: user.user_metadata?.full_name || user.email?.split("@")[0] || "User",
-          content: replyContent,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          likes: 0,
-          dislikes: 0,
-          status: "approved",
-          user_profile: {
-            avatar_url: user.user_metadata?.avatar_url || null,
-          },
-          replies: [],
-        }
-
-        // Add to local state
-        if (newReply.parent_id === null) {
-          setLocalReplies((prev) => [...prev, newReply])
-        } else {
-          setLocalReplies((prev) => addNestedReply(prev, newReply.parent_id!, newReply))
-        }
-
-        // Set as new reply for animation
-        setNewReplyId(newReply.id)
-
-        // Clear the new reply ID after animation
-        setTimeout(() => {
-          setNewReplyId(null)
-        }, 3000)
+        // Replace the optimistic reply with the real one
+        setLocalReplies((prev) =>
+          prev.map((reply) =>
+            reply.id === optimisticReply.id
+              ? { ...insertedReply, user_profile: optimisticReply.user_profile, replies: [] }
+              : reply,
+          ),
+        )
       }
+
+      // Clear the new reply ID after animation
+      setTimeout(() => {
+        setNewReplyId(null)
+      }, 3000)
     } catch (error) {
       console.error("Error submitting reply:", error)
       setErrorMessage("Failed to submit reply. Please try again.")
@@ -389,6 +420,10 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
 
     // Refresh the session after successful login
     await refreshSession()
+
+    // Update authentication status
+    const { data } = await supabase.auth.getSession()
+    setIsAuthenticated(!!data.session)
 
     // Focus the reply input after a short delay
     setTimeout(() => {
