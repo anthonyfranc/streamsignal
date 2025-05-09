@@ -1,96 +1,95 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import type { RealtimeChannel } from "@supabase/supabase-js"
-import { supabase } from "@/lib/supabase"
+import { supabaseClient } from "@/utils/supabase-client"
 
-type SubscriptionCallback<T> = (payload: { new: T; old: T | null }) => void
-
-export function useSupabaseRealtime<T = any>(
-  table: string,
-  event: "INSERT" | "UPDATE" | "DELETE" | "*" = "*",
-  filter?: { column: string; value: any },
-  callback?: SubscriptionCallback<T>,
+export function useSupabaseRealtime<T>(
+  tableName: string,
+  initialData: T[],
+  options?: {
+    event?: "INSERT" | "UPDATE" | "DELETE" | "*"
+    filter?: string
+    filterValue?: any
+  },
 ) {
-  const [subscription, setSubscription] = useState<RealtimeChannel | null>(null)
-  const [data, setData] = useState<T[]>([])
+  const [data, setData] = useState<T[]>(initialData)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<Error | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
 
   useEffect(() => {
-    let channel: RealtimeChannel
+    // Update state when initialData changes (e.g., from a new server fetch)
+    setData(initialData)
+  }, [initialData])
 
-    const setupSubscription = async () => {
-      try {
-        setIsLoading(true)
+  useEffect(() => {
+    const event = options?.event || "*"
 
-        // Create a channel with a specific name for this subscription
-        const channelName = filter ? `${table}:${filter.column}:eq:${filter.value}` : `${table}:all`
+    // Set up realtime subscription
+    const channel = supabaseClient
+      .channel(`${tableName}-changes`)
+      .on(
+        "postgres_changes",
+        {
+          event,
+          schema: "public",
+          table: tableName,
+          ...(options?.filter && options?.filterValue ? { filter: `${options.filter}=eq.${options.filterValue}` } : {}),
+        },
+        (payload) => {
+          try {
+            console.log(`Realtime ${event} event on ${tableName}:`, payload)
 
-        // Set up the subscription
-        channel = supabase.channel(channelName)
-
-        // Build the filter
-        const query = supabase.channel(channelName).on(
-          "postgres_changes",
-          {
-            event: event,
-            schema: "public",
-            table: table,
-          },
-          (payload) => {
-            // If a filter is specified, check if the payload matches
-            if (filter) {
-              const newRecord = payload.new as any
-              if (newRecord[filter.column] !== filter.value) {
-                return
+            if (event === "*" || event === "INSERT") {
+              if (payload.eventType === "INSERT") {
+                // Add new record to the data array
+                setData((currentData) => [...currentData, payload.new as T])
               }
             }
 
-            // Call the callback if provided
-            if (callback) {
-              callback(payload as any)
+            if (event === "*" || event === "UPDATE") {
+              if (payload.eventType === "UPDATE") {
+                // Update existing record in the data array
+                setData((currentData) =>
+                  currentData.map((item) => {
+                    // @ts-ignore - we don't know the shape of T
+                    if (item.id === payload.new.id) {
+                      return payload.new as T
+                    }
+                    return item
+                  }),
+                )
+              }
             }
 
-            // Update the internal state based on the event type
-            if (payload.eventType === "INSERT") {
-              setData((prev) => [...prev, payload.new as T])
-            } else if (payload.eventType === "UPDATE") {
-              setData((prev) =>
-                prev.map((item) => ((item as any).id === (payload.new as any).id ? (payload.new as T) : item)),
-              )
-            } else if (payload.eventType === "DELETE") {
-              setData((prev) => prev.filter((item) => (item as any).id !== (payload.old as any).id))
+            if (event === "*" || event === "DELETE") {
+              if (payload.eventType === "DELETE") {
+                // Remove deleted record from the data array
+                setData((currentData) =>
+                  currentData.filter((item) => {
+                    // @ts-ignore - we don't know the shape of T
+                    return item.id !== payload.old.id
+                  }),
+                )
+              }
             }
-          },
-        )
-
-        // Subscribe to the channel
-        channel.subscribe((status) => {
-          if (status === "SUBSCRIBED") {
-            console.log(`Subscribed to ${channelName}`)
+          } catch (err) {
+            console.error("Error handling realtime update:", err)
+            setError(err instanceof Error ? err : new Error(String(err)))
           }
-        })
+        },
+      )
+      .subscribe((status) => {
+        console.log(`Realtime subscription to ${tableName} status:`, status)
+        if (status === "SUBSCRIBED") {
+          console.log(`Successfully subscribed to ${tableName} changes`)
+        }
+      })
 
-        setSubscription(channel)
-      } catch (err) {
-        console.error("Error setting up real-time subscription:", err)
-        setError(err instanceof Error ? err : new Error("Unknown error"))
-      } finally {
-        setIsLoading(false)
-      }
-    }
-
-    setupSubscription()
-
-    // Cleanup function
     return () => {
-      if (channel) {
-        console.log("Unsubscribing from channel")
-        supabase.removeChannel(channel)
-      }
+      // Clean up subscription when component unmounts
+      supabaseClient.channel(channel.subscription.topic).unsubscribe()
     }
-  }, [table, event, filter ? JSON.stringify(filter) : ""])
+  }, [tableName, options?.event, options?.filter, options?.filterValue])
 
-  return { subscription, data, error, isLoading }
+  return { data, loading, error, setData }
 }

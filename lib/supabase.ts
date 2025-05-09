@@ -1,45 +1,32 @@
-"use client"
-
 import { createClient } from "@supabase/supabase-js"
 import type { Database } from "@/types/database"
 
-// Ensure environment variables are available and provide better error messages
-const getSupabaseUrl = () => {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  if (!url) {
-    console.error("NEXT_PUBLIC_SUPABASE_URL is not defined")
-    // Return a placeholder to prevent runtime errors, but the client won't work
-    return "https://placeholder-url.supabase.co"
+// Get the Supabase URL and anon key from environment variables
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+
+// Create a Supabase client that works in both client and server components
+export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey)
+
+// Create a singleton instance for reuse
+let _supabaseServer: ReturnType<typeof getSupabase> | null = null
+
+// Helper function to create a Supabase client for server components
+export function getSupabase() {
+  if (!_supabaseServer) {
+    _supabaseServer = createClient<Database>(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: false,
+      },
+    })
   }
-  return url
+  return _supabaseServer
 }
-
-const getSupabaseAnonKey = () => {
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  if (!key) {
-    console.error("NEXT_PUBLIC_SUPABASE_ANON_KEY is not defined")
-    // Return a placeholder to prevent runtime errors, but the client won't work
-    return "placeholder-key"
-  }
-  return key
-}
-
-// Create a single supabase client for the browser
-const createBrowserClient = () => {
-  const supabaseUrl = getSupabaseUrl()
-  const supabaseAnonKey = getSupabaseAnonKey()
-
-  return createClient<Database>(supabaseUrl, supabaseAnonKey)
-}
-
-// For client components
-export const supabase = createBrowserClient()
 
 // Helper function to check Supabase connection
-// This is a safe version that doesn't use the service role key
+// This works in both client and server components
 export async function checkSupabaseConnection() {
   try {
-    // Use the regular client with anon key to check connection
     const { data, error } = await supabase.from("channels").select("count").limit(1)
 
     if (error) {
@@ -57,14 +44,4 @@ export async function checkSupabaseConnection() {
   }
 }
 
-// Create a singleton instance for reuse
-let _supabaseServer: ReturnType<typeof createBrowserClient> | null = null
-
-export function getServerSupabaseClient() {
-  if (!_supabaseServer) {
-    _supabaseServer = createBrowserClient()
-  }
-  return _supabaseServer
-}
-
-export const supabaseServer = getServerSupabaseClient()
+export const supabaseServer = getSupabase()
