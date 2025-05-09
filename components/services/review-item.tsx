@@ -313,7 +313,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
     })
   }
 
-  const handleReplySubmit = async (event: React.FormEvent) => {
+  const handleReplySubmit = async (event: React.FormEvent, parentId: number | null = null) => {
     event.preventDefault()
 
     if (!user || !session) {
@@ -347,11 +347,14 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
       // Generate a temporary negative ID for the optimistic reply
       const tempId = -Math.floor(Math.random() * 1000000)
 
+      // Use the provided parentId or the one from replyingTo state
+      const actualParentId = parentId !== null ? parentId : replyingTo?.id || null
+
       // Add optimistic reply to UI immediately
       const optimisticReply: Reply = {
         id: tempId, // Temporary negative ID
         review_id: review.id,
-        parent_id: replyingTo?.id || null,
+        parent_id: actualParentId,
         user_id: user.id,
         author_name: user.user_metadata?.full_name || user.email?.split("@")[0] || "User",
         content: replyContent,
@@ -381,7 +384,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
         .from("review_replies")
         .insert({
           review_id: review.id,
-          parent_id: replyingTo?.id || null,
+          parent_id: actualParentId,
           user_id: user.id,
           author_name: user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0] || "User",
           content: replyContent,
@@ -397,7 +400,11 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
         setErrorMessage(`Failed to save reply: ${error.message}`)
 
         // Remove the optimistic reply
-        setLocalReplies((prev) => prev.filter((reply) => reply.id !== optimisticReply.id))
+        if (optimisticReply.parent_id === null) {
+          setLocalReplies((prev) => prev.filter((reply) => reply.id !== optimisticReply.id))
+        } else {
+          setLocalReplies((prev) => removeOptimisticNestedReply(prev, optimisticReply.id))
+        }
       } else {
         // Clear the form after successful submission
         setReplyContent("")
@@ -419,11 +426,23 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
         })
 
         // Replace the optimistic reply with the real one
-        setLocalReplies((prev) =>
-          prev.map((reply) =>
-            reply.id === tempId ? { ...insertedReply, user_profile: optimisticReply.user_profile, replies: [] } : reply,
-          ),
-        )
+        if (optimisticReply.parent_id === null) {
+          setLocalReplies((prev) =>
+            prev.map((reply) =>
+              reply.id === tempId
+                ? { ...insertedReply, user_profile: optimisticReply.user_profile, replies: [] }
+                : reply,
+            ),
+          )
+        } else {
+          setLocalReplies((prev) =>
+            replaceOptimisticNestedReply(prev, tempId, {
+              ...insertedReply,
+              user_profile: optimisticReply.user_profile,
+              replies: [],
+            }),
+          )
+        }
       }
 
       // Clear the new reply ID after animation
@@ -436,6 +455,38 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
     } finally {
       setIsPending(false)
     }
+  }
+
+  // Helper function to remove an optimistic nested reply
+  const removeOptimisticNestedReply = (replies: Reply[], replyId: number): Reply[] => {
+    return replies.map((reply) => {
+      if (reply.replies && reply.replies.length > 0) {
+        const filteredReplies = reply.replies.filter((r) => r.id !== replyId)
+        if (filteredReplies.length !== reply.replies.length) {
+          // Found and removed the reply
+          return { ...reply, replies: filteredReplies }
+        }
+        // Check deeper in the tree
+        return { ...reply, replies: removeOptimisticNestedReply(reply.replies, replyId) }
+      }
+      return reply
+    })
+  }
+
+  // Helper function to replace an optimistic nested reply with the real one
+  const replaceOptimisticNestedReply = (replies: Reply[], tempId: number, realReply: Reply): Reply[] => {
+    return replies.map((reply) => {
+      if (reply.replies && reply.replies.length > 0) {
+        const updatedReplies = reply.replies.map((r) => (r.id === tempId ? realReply : r))
+        if (updatedReplies.some((r) => r.id === realReply.id)) {
+          // Found and replaced the reply
+          return { ...reply, replies: updatedReplies }
+        }
+        // Check deeper in the tree
+        return { ...reply, replies: replaceOptimisticNestedReply(reply.replies, tempId, realReply) }
+      }
+      return reply
+    })
   }
 
   const handleVote = async (voteType: "like" | "dislike") => {
@@ -535,11 +586,186 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
     }
   }
 
+  // Inline reply form component
+  const InlineReplyForm = ({ parentId, parentName }: { parentId: number; parentName: string }) => {
+    const [inlineReplyContent, setInlineReplyContent] = useState("")
+    const [isInlinePending, setIsInlinePending] = useState(false)
+    const inlineInputRef = useRef<HTMLTextAreaElement>(null)
+
+    // Focus the input when the form is mounted
+    useEffect(() => {
+      if (inlineInputRef.current) {
+        inlineInputRef.current.focus()
+      }
+    }, [])
+
+    const handleInlineSubmit = async (e: React.FormEvent) => {
+      e.preventDefault()
+
+      if (!inlineReplyContent.trim()) return
+
+      setIsInlinePending(true)
+
+      try {
+        // Ensure we have a fresh session
+        await refreshSession()
+
+        // Force a new auth token to be used
+        const { data: authData } = await supabase.auth.getSession()
+        if (!authData.session) {
+          setErrorMessage("Your session has expired. Please sign in again.")
+          setAuthModalOpen(true)
+          setIsInlinePending(false)
+          return
+        }
+
+        // Generate a temporary negative ID for the optimistic reply
+        const tempId = -Math.floor(Math.random() * 1000000)
+
+        // Add optimistic reply to UI immediately
+        const optimisticReply: Reply = {
+          id: tempId, // Temporary negative ID
+          review_id: review.id,
+          parent_id: parentId,
+          user_id: user!.id,
+          author_name: user!.user_metadata?.full_name || user!.email?.split("@")[0] || "User",
+          content: inlineReplyContent,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          likes: 0,
+          dislikes: 0,
+          status: "approved",
+          user_profile: {
+            avatar_url: user!.user_metadata?.avatar_url || null,
+          },
+          replies: [],
+        }
+
+        // Add to local state
+        setLocalReplies((prev) => addNestedReply(prev, parentId, optimisticReply))
+
+        // Set as new reply for animation
+        setNewReplyId(optimisticReply.id)
+
+        // Submit directly to Supabase
+        const { data: insertedReply, error } = await supabase
+          .from("review_replies")
+          .insert({
+            review_id: review.id,
+            parent_id: parentId,
+            user_id: user!.id,
+            author_name:
+              user!.user_metadata?.full_name || user!.user_metadata?.name || user!.email?.split("@")[0] || "User",
+            content: inlineReplyContent,
+            likes: 0,
+            dislikes: 0,
+            status: "approved", // Set to approved for immediate display
+          })
+          .select()
+          .single()
+
+        if (error) {
+          console.error("Error submitting inline reply:", error)
+          setErrorMessage(`Failed to save reply: ${error.message}`)
+
+          // Remove the optimistic reply
+          setLocalReplies((prev) => removeOptimisticNestedReply(prev, optimisticReply.id))
+        } else {
+          // Add the real ID to the pending set so we ignore the realtime update
+          setPendingReplyIds((prev) => {
+            const newSet = new Set(prev)
+            newSet.add(insertedReply.id)
+            return newSet
+          })
+
+          // Map the temporary ID to the real ID
+          setOptimisticReplyMap((prev) => {
+            const newMap = new Map(prev)
+            newMap.set(tempId, insertedReply.id)
+            return newMap
+          })
+
+          // Replace the optimistic reply with the real one
+          setLocalReplies((prev) =>
+            replaceOptimisticNestedReply(prev, tempId, {
+              ...insertedReply,
+              user_profile: optimisticReply.user_profile,
+              replies: [],
+            }),
+          )
+
+          // Show success message
+          setSuccessMessage("Reply submitted successfully!")
+        }
+
+        // Clear the form and reset the replying state
+        setInlineReplyContent("")
+        setReplyingTo(null)
+
+        // Clear the new reply ID after animation
+        setTimeout(() => {
+          setNewReplyId(null)
+        }, 3000)
+      } catch (error) {
+        console.error("Error submitting inline reply:", error)
+        setErrorMessage("Failed to submit reply. Please try again.")
+      } finally {
+        setIsInlinePending(false)
+      }
+    }
+
+    return (
+      <div className="mt-2 ml-6 mb-3">
+        <form onSubmit={handleInlineSubmit} className="flex items-start gap-3" action="javascript:void(0);">
+          <Avatar className="h-8 w-8 flex-shrink-0">
+            <AvatarImage
+              src={user?.user_metadata?.avatar_url || "/placeholder.svg?height=32&width=32&query=avatar"}
+              alt={user?.user_metadata?.full_name || "User"}
+            />
+            <AvatarFallback>
+              {(user?.user_metadata?.full_name || user?.email || "U").substring(0, 2).toUpperCase()}
+            </AvatarFallback>
+          </Avatar>
+          <div className="flex-1 flex items-end gap-2">
+            <div className="flex-1 relative">
+              <div className="absolute -top-6 left-0 text-xs text-gray-500 flex items-center">
+                <span>Replying to {parentName}</span>
+                <button
+                  type="button"
+                  className="ml-2 text-gray-400 hover:text-gray-600"
+                  onClick={() => setReplyingTo(null)}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+              <Textarea
+                ref={inlineInputRef}
+                placeholder={`Write a reply to ${parentName}...`}
+                className="min-h-[60px] py-2 px-3 resize-none"
+                value={inlineReplyContent}
+                onChange={(e) => setInlineReplyContent(e.target.value)}
+              />
+            </div>
+            <Button
+              type="submit"
+              size="sm"
+              className="h-9 w-9 p-0 rounded-full"
+              disabled={isInlinePending || !inlineReplyContent.trim()}
+            >
+              {isInlinePending ? <span className="animate-spin">⏳</span> : <Send className="h-4 w-4" />}
+            </Button>
+          </div>
+        </form>
+      </div>
+    )
+  }
+
   // Recursive component for rendering replies
   const ReplyThread = ({ reply, depth = 0 }: { reply: Reply; depth?: number }) => {
     const maxDepth = 3 // Maximum nesting level
     const isNew = reply.id === newReplyId
     const replyRef = isNew ? newReplyRef : null
+    const isReplying = replyingTo?.id === reply.id
 
     return (
       <motion.div
@@ -598,6 +824,9 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
             </div>
           </div>
         </div>
+
+        {/* Inline reply form when replying to this specific comment */}
+        {isReplying && user && <InlineReplyForm parentId={reply.id} parentName={reply.author_name} />}
 
         {/* Nested replies */}
         {reply.replies && reply.replies.length > 0 && (
@@ -715,11 +944,11 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
               </div>
             )}
 
-            {/* Facebook-style Reply Form */}
-            {user ? (
+            {/* Main reply form - only show if not replying to a specific comment */}
+            {user && !replyingTo && (
               <form
                 ref={formRef}
-                onSubmit={handleReplySubmit}
+                onSubmit={(e) => handleReplySubmit(e)}
                 className="flex items-start gap-3"
                 action="javascript:void(0);"
               >
@@ -733,26 +962,10 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
                   </AvatarFallback>
                 </Avatar>
                 <div className="flex-1 flex items-end gap-2">
-                  <div className="flex-1 relative">
-                    {replyingTo && (
-                      <div className="absolute -top-6 left-0 text-xs text-gray-500 flex items-center">
-                        <span>Replying to {replyingTo.name}</span>
-                        <button
-                          type="button"
-                          className="ml-2 text-gray-400 hover:text-gray-600"
-                          onClick={() => setReplyingTo(null)}
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </div>
-                    )}
+                  <div className="flex-1">
                     <Textarea
                       ref={replyInputRef}
-                      placeholder={
-                        replyingTo
-                          ? `Write a reply to ${replyingTo.name}...`
-                          : `Write a comment, ${user?.user_metadata?.full_name?.split(" ")[0] || "there"}...`
-                      }
+                      placeholder={`Write a comment, ${user?.user_metadata?.full_name?.split(" ")[0] || "there"}...`}
                       className="min-h-[60px] py-2 px-3 resize-none"
                       value={replyContent}
                       onChange={(e) => setReplyContent(e.target.value)}
@@ -768,7 +981,10 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
                   </Button>
                 </div>
               </form>
-            ) : (
+            )}
+
+            {/* Sign in prompt if not logged in */}
+            {!user && (
               <div
                 className="flex items-center justify-center p-3 bg-gray-50 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors"
                 onClick={() => setAuthModalOpen(true)}
