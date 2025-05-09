@@ -1,6 +1,6 @@
 "use server"
-import { createServerClient } from "@/lib/supabase-server"
 import { cookies } from "next/headers"
+import { createServerClient } from "@/lib/supabase-server"
 import type { Reply } from "@/types/reviews"
 
 export async function submitReviewReply(
@@ -24,9 +24,6 @@ export async function submitReviewReply(
         requireAuth: true,
       }
     }
-
-    // Log session info for debugging
-    console.log("Session found:", session.user.id)
 
     // Extract and validate data
     const reviewId = Number.parseInt(formData.get("reviewId") as string)
@@ -102,12 +99,6 @@ export async function submitReviewReply(
         message: "Failed to submit reply. Please try again.",
       }
     }
-
-    // We don't need to revalidate the path anymore since we're using real-time updates
-    // This prevents the tab from resetting to the default
-    // if (serviceId && !isNaN(serviceId)) {
-    //   revalidatePath(`/services/${serviceId}`)
-    // }
 
     return {
       success: true,

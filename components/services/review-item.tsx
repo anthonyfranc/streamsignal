@@ -39,6 +39,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
   const replyInputRef = useRef<HTMLTextAreaElement>(null)
   const newReplyRef = useRef<HTMLDivElement>(null)
   const [newReplyId, setNewReplyId] = useState<number | null>(null)
+  const [retryCount, setRetryCount] = useState(0)
 
   // Set up real-time subscription for replies to this review
   useSupabaseRealtime<Reply>("review_replies", "*", { column: "review_id", value: review.id }, async (payload) => {
@@ -193,25 +194,24 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
         formData.append("parentId", replyingTo.id.toString())
       }
 
-      // Add user information to help debug
-      formData.append("userId", user.id)
-      formData.append("userEmail", user.email || "")
-
       // Submit to server - the real-time subscription will handle the UI update
       const result = await submitReviewReply(formData)
 
       if (!result.success) {
-        if (result.requireAuth) {
-          // If the server says we need auth, refresh the session
+        if (result.requireAuth && retryCount < 1) {
+          // If the server says we need auth, refresh the session and try once more
           await supabase.auth.refreshSession()
-          setErrorMessage("Session refreshed. Please try again.")
+          setRetryCount(retryCount + 1)
+          setErrorMessage("Please try submitting again")
         } else {
           setErrorMessage(`Failed to save reply: ${result.message}`)
+          setRetryCount(0)
         }
       } else {
         // Clear the form after successful submission
         setReplyContent("")
         setReplyingTo(null)
+        setRetryCount(0)
 
         // Optimistically add the reply to the UI
         const newReply: Reply = {
