@@ -40,6 +40,8 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
   const [newReplyId, setNewReplyId] = useState<number | null>(null)
   const [channels, setChannels] = useState<any[]>([])
   const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [pendingReplyIds, setPendingReplyIds] = useState<Set<number>>(new Set())
+  const [optimisticReplyMap, setOptimisticReplyMap] = useState<Map<number, number>>(new Map())
 
   // Check authentication status
   useEffect(() => {
@@ -77,6 +79,51 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
             // For new replies, fetch the user profile
             if (payload.eventType === "INSERT") {
               const reply = payload.new as Reply
+
+              // Check if this is a reply we've already handled optimistically
+              if (pendingReplyIds.has(reply.id)) {
+                console.log("Ignoring realtime update for optimistically handled reply:", reply.id)
+
+                // Remove from pending set since we've now received the real-time confirmation
+                setPendingReplyIds((prev) => {
+                  const newSet = new Set(prev)
+                  newSet.delete(reply.id)
+                  return newSet
+                })
+
+                return
+              }
+
+              // Check if this is a reply that replaces an optimistic one
+              const tempId = findTempIdForRealId(reply.id)
+              if (tempId) {
+                console.log("Replacing optimistic reply:", tempId, "with real reply:", reply.id)
+
+                // Replace the optimistic reply with the real one
+                setLocalReplies((prev) =>
+                  prev.map((r) => {
+                    if (r.id === tempId) {
+                      return {
+                        ...reply,
+                        user_profile: r.user_profile, // Keep the user profile from the optimistic reply
+                        replies: r.replies || [], // Keep any nested replies
+                      }
+                    }
+                    return r
+                  }),
+                )
+
+                // Remove the mapping
+                setOptimisticReplyMap((prev) => {
+                  const newMap = new Map(prev)
+                  newMap.delete(tempId)
+                  return newMap
+                })
+
+                return
+              }
+
+              // This is a genuinely new reply from someone else
               const replyWithProfile = { ...reply, user_profile: { avatar_url: null }, replies: [] }
 
               if (reply.user_id) {
@@ -174,7 +221,17 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
         supabase.removeChannel(channel)
       })
     }
-  }, [review.id])
+  }, [review.id, pendingReplyIds])
+
+  // Helper function to find a temporary ID for a real ID
+  const findTempIdForRealId = (realId: number): number | null => {
+    for (const [tempId, mappedRealId] of optimisticReplyMap.entries()) {
+      if (mappedRealId === realId) {
+        return tempId
+      }
+    }
+    return null
+  }
 
   // Initialize with the provided replies
   useEffect(() => {
@@ -287,19 +344,12 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
 
       console.log("Submitting reply with auth:", !!authData.session)
 
-      // Create form data for submission
-      const formData = new FormData()
-      formData.append("serviceId", serviceId.toString())
-      formData.append("reviewId", review.id.toString())
-      formData.append("content", replyContent)
-
-      if (replyingTo && replyingTo.id !== null) {
-        formData.append("parentId", replyingTo.id.toString())
-      }
+      // Generate a temporary negative ID for the optimistic reply
+      const tempId = -Math.floor(Math.random() * 1000000)
 
       // Add optimistic reply to UI immediately
       const optimisticReply: Reply = {
-        id: Math.random() * -1000, // Temporary negative ID
+        id: tempId, // Temporary negative ID
         review_id: review.id,
         parent_id: replyingTo?.id || null,
         user_id: user.id,
@@ -354,12 +404,24 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
         setReplyingTo(null)
         setSuccessMessage("Reply submitted successfully!")
 
+        // Add the real ID to the pending set so we ignore the realtime update
+        setPendingReplyIds((prev) => {
+          const newSet = new Set(prev)
+          newSet.add(insertedReply.id)
+          return newSet
+        })
+
+        // Map the temporary ID to the real ID
+        setOptimisticReplyMap((prev) => {
+          const newMap = new Map(prev)
+          newMap.set(tempId, insertedReply.id)
+          return newMap
+        })
+
         // Replace the optimistic reply with the real one
         setLocalReplies((prev) =>
           prev.map((reply) =>
-            reply.id === optimisticReply.id
-              ? { ...insertedReply, user_profile: optimisticReply.user_profile, replies: [] }
-              : reply,
+            reply.id === tempId ? { ...insertedReply, user_profile: optimisticReply.user_profile, replies: [] } : reply,
           ),
         )
       }
