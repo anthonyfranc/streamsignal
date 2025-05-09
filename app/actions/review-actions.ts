@@ -1,5 +1,4 @@
 "use server"
-import { revalidatePath } from "next/cache"
 import { createServerClient } from "@/lib/supabase-server"
 import { cookies } from "next/headers"
 import type { Review } from "@/types/reviews"
@@ -108,9 +107,6 @@ export async function submitServiceReview(
       console.error("Error submitting review:", error)
       return { success: false, message: "Failed to submit review. Please try again." }
     }
-
-    // Revalidate the service page to show the new review
-    revalidatePath(`/services/${serviceId}`)
 
     return {
       success: true,

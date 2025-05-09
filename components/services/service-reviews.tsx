@@ -279,10 +279,50 @@ export function ServiceReviews({ serviceId }: ServiceReviewsProps) {
         formData.append("contentRating", (contentRating || rating).toString())
         formData.append("valueRating", (valueRating || rating).toString())
 
-        // Submit to server - the real-time subscription will handle the UI update
+        // Submit to server
         const result = await submitServiceReview(formData)
 
         if (result.success) {
+          // If we have a reviewId, manually add the review to the UI
+          if (result.reviewId) {
+            // Create a new review object
+            const newReview: Review = {
+              id: result.reviewId,
+              service_id: serviceId,
+              user_id: user.id,
+              author_name:
+                user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0] || "User",
+              rating: rating,
+              title: reviewTitle,
+              content: reviewContent,
+              interface_rating: interfaceRating || rating,
+              reliability_rating: reliabilityRating || rating,
+              content_rating: contentRating || rating,
+              value_rating: valueRating || rating,
+              likes: 0,
+              dislikes: 0,
+              created_at: new Date().toISOString(),
+              status: "approved",
+              user_profile: {
+                avatar_url: user.user_metadata?.avatar_url || null,
+              },
+            }
+
+            // Add the new review to the state
+            setReviews((prev) => [newReview, ...prev])
+
+            // Initialize empty replies for this review
+            setReplies((prev) => ({ ...prev, [newReview.id]: [] }))
+
+            // Mark this as the newest review for animation
+            setNewReviewId(newReview.id)
+
+            // Clear the new review ID after animation
+            setTimeout(() => {
+              setNewReviewId(null)
+            }, 3000)
+          }
+
           // Reset form
           setRating(0)
           setInterfaceRating(0)
@@ -294,6 +334,17 @@ export function ServiceReviews({ serviceId }: ServiceReviewsProps) {
 
           // Hide the form after successful submission
           setShowReviewForm(false)
+
+          // Show success message
+          setFormMessage({
+            type: "success",
+            text: "Your review has been submitted successfully!",
+          })
+
+          // Clear success message after 3 seconds
+          setTimeout(() => {
+            setFormMessage(null)
+          }, 3000)
         } else {
           setFormMessage({ type: "error", text: result.message })
           if (result.requireAuth) {
