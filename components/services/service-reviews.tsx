@@ -22,11 +22,11 @@ import { supabase } from "@/lib/supabase"
 import type { Review, Reply } from "@/types/reviews"
 import { useSupabaseRealtime } from "@/hooks/use-supabase-realtime"
 
-interface ServiceReviewsProps {
-  serviceId: number
-}
+// Add an isVisible prop to the component to track when it's actually visible
+// This will allow us to control when subscriptions are active
 
-export function ServiceReviews({ serviceId }: ServiceReviewsProps) {
+// Update the component signature to accept the isVisible prop
+export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: number; isVisible?: boolean }) {
   const { user } = useAuth()
   const [reviewFilter, setReviewFilter] = useState("all")
   const [isPending, startTransition] = useTransition()
@@ -49,60 +49,78 @@ export function ServiceReviews({ serviceId }: ServiceReviewsProps) {
   const [reviewContent, setReviewContent] = useState("")
 
   // Set up real-time subscription for reviews
-  useSupabaseRealtime<Review>("service_reviews", "*", { column: "service_id", value: serviceId }, async (payload) => {
-    if (payload.new && payload.new.status === "approved") {
-      // For new reviews, fetch the user profile
-      if (payload.eventType === "INSERT") {
-        const review = payload.new
-        const reviewWithProfile = { ...review, user_profile: { avatar_url: null } }
+  useSupabaseRealtime<Review>(
+    "service_reviews",
+    "*",
+    { column: "service_id", value: serviceId },
+    async (payload) => {
+      if (payload.new && payload.new.status === "approved") {
+        // For new reviews, fetch the user profile
+        if (payload.eventType === "INSERT") {
+          const review = payload.new
 
-        if (review.user_id) {
-          const { data: profileData } = await supabase
-            .from("user_profiles")
-            .select("avatar_url")
-            .eq("id", review.user_id)
-            .single()
-
-          if (profileData) {
-            reviewWithProfile.user_profile = profileData
+          // Check if this is our own review that we've already added optimistically
+          const existingReview = reviews.find((r) => r.id === review.id)
+          if (existingReview) {
+            console.log("Ignoring realtime update for already displayed review:", review.id)
+            return
           }
+
+          const reviewWithProfile = { ...review, user_profile: { avatar_url: null } }
+
+          try {
+            if (review.user_id) {
+              const { data: profileData, error } = await supabase
+                .from("user_profiles")
+                .select("avatar_url")
+                .eq("id", review.user_id)
+                .single()
+
+              if (profileData && !error) {
+                reviewWithProfile.user_profile = profileData
+              }
+            }
+          } catch (error) {
+            console.error("Error fetching user profile:", error)
+          }
+
+          // Mark this as the newest review for animation
+          setNewReviewId(review.id)
+
+          // Add the new review to the state
+          setReviews((prev) => [reviewWithProfile, ...prev])
+
+          // Initialize empty replies for this review
+          setReplies((prev) => ({ ...prev, [review.id]: [] }))
+
+          // Clear the new review ID after animation
+          setTimeout(() => {
+            setNewReviewId(null)
+          }, 3000)
         }
+        // For updated reviews, update the local state
+        else if (payload.eventType === "UPDATE") {
+          setReviews((prev) =>
+            prev.map((review) =>
+              review.id === payload.new.id ? { ...review, ...payload.new, user_profile: review.user_profile } : review,
+            ),
+          )
+        }
+        // For deleted reviews, remove from local state
+        else if (payload.eventType === "DELETE" && payload.old) {
+          setReviews((prev) => prev.filter((review) => review.id !== payload.old.id))
 
-        // Mark this as the newest review for animation
-        setNewReviewId(review.id)
-
-        // Add the new review to the state
-        setReviews((prev) => [reviewWithProfile, ...prev])
-
-        // Initialize empty replies for this review
-        setReplies((prev) => ({ ...prev, [review.id]: [] }))
-
-        // Clear the new review ID after animation
-        setTimeout(() => {
-          setNewReviewId(null)
-        }, 3000)
+          // Also remove any replies for this review
+          setReplies((prev) => {
+            const newReplies = { ...prev }
+            delete newReplies[payload.old.id]
+            return newReplies
+          })
+        }
       }
-      // For updated reviews, update the local state
-      else if (payload.eventType === "UPDATE") {
-        setReviews((prev) =>
-          prev.map((review) =>
-            review.id === payload.new.id ? { ...review, ...payload.new, user_profile: review.user_profile } : review,
-          ),
-        )
-      }
-      // For deleted reviews, remove from local state
-      else if (payload.eventType === "DELETE" && payload.old) {
-        setReviews((prev) => prev.filter((review) => review.id !== payload.old.id))
-
-        // Also remove any replies for this review
-        setReplies((prev) => {
-          const newReplies = { ...prev }
-          delete newReplies[payload.old.id]
-          return newReplies
-        })
-      }
-    }
-  })
+    },
+    isVisible, // Pass the isVisible prop
+  )
 
   // Initial data fetch
   const fetchInitialData = useCallback(async () => {
@@ -146,77 +164,104 @@ export function ServiceReviews({ serviceId }: ServiceReviewsProps) {
 
       setReviews(reviewsWithProfiles as Review[])
 
-      // Fetch replies for each review
+      // Fetch replies for each review with a delay between requests to avoid rate limiting
       const repliesMap: Record<number, Reply[]> = {}
 
-      for (const review of reviewsData) {
-        // Fetch all replies for this review
-        const { data: repliesData, error: repliesError } = await supabase
-          .from("review_replies")
-          .select(`*`)
-          .eq("review_id", review.id)
-          .eq("status", "approved")
-          .order("created_at", { ascending: true })
+      // Process reviews in batches to avoid rate limiting
+      const batchSize = 2
+      for (let i = 0; i < reviewsData.length; i += batchSize) {
+        const batch = reviewsData.slice(i, i + batchSize)
 
-        if (repliesError) {
-          console.error(`Error fetching replies for review ${review.id}:`, repliesError)
-          continue
-        }
+        // Process each review in the batch in parallel
+        await Promise.all(
+          batch.map(async (review) => {
+            try {
+              // Fetch all replies for this review
+              const { data: repliesData, error: repliesError } = await supabase
+                .from("review_replies")
+                .select(`*`)
+                .eq("review_id", review.id)
+                .eq("status", "approved")
+                .order("created_at", { ascending: true })
 
-        if (repliesData && repliesData.length > 0) {
-          // For each reply, fetch the user profile separately
-          const repliesWithProfiles = await Promise.all(
-            repliesData.map(async (reply) => {
-              if (reply.user_id) {
-                const { data: profileData } = await supabase
-                  .from("user_profiles")
-                  .select("avatar_url")
-                  .eq("id", reply.user_id)
-                  .single()
-
-                return {
-                  ...reply,
-                  user_profile: profileData || { avatar_url: null },
+              if (repliesError) {
+                // Check for rate limiting errors specifically
+                if (repliesError.message && repliesError.message.includes("Too Many")) {
+                  console.warn(`Rate limited when fetching replies for review ${review.id}, will set empty replies`)
+                  repliesMap[review.id] = []
+                  return
                 }
+
+                console.error(`Error fetching replies for review ${review.id}:`, repliesError)
+                repliesMap[review.id] = []
+                return
               }
-              return {
-                ...reply,
-                user_profile: { avatar_url: null },
-              }
-            }),
-          )
 
-          // Organize replies into a threaded structure
-          const threadedReplies: Reply[] = []
-          const replyMap: Record<number, Reply> = {}
+              if (repliesData && repliesData.length > 0) {
+                // For each reply, fetch the user profile separately
+                const repliesWithProfiles = await Promise.all(
+                  repliesData.map(async (reply) => {
+                    if (reply.user_id) {
+                      const { data: profileData } = await supabase
+                        .from("user_profiles")
+                        .select("avatar_url")
+                        .eq("id", reply.user_id)
+                        .single()
 
-          // First pass: create a map of all replies
-          repliesWithProfiles.forEach((reply) => {
-            replyMap[reply.id] = { ...reply, replies: [] }
-          })
+                      return {
+                        ...reply,
+                        user_profile: profileData || { avatar_url: null },
+                      }
+                    }
+                    return {
+                      ...reply,
+                      user_profile: { avatar_url: null },
+                    }
+                  }),
+                )
 
-          // Second pass: organize into parent-child relationships
-          repliesWithProfiles.forEach((reply) => {
-            if (reply.parent_id === null) {
-              // This is a top-level reply
-              threadedReplies.push(replyMap[reply.id])
-            } else {
-              // This is a child reply
-              if (replyMap[reply.parent_id]) {
-                if (!replyMap[reply.parent_id].replies) {
-                  replyMap[reply.parent_id].replies = []
-                }
-                replyMap[reply.parent_id].replies!.push(replyMap[reply.id])
+                // Organize replies into a threaded structure
+                const threadedReplies: Reply[] = []
+                const replyMap: Record<number, Reply> = {}
+
+                // First pass: create a map of all replies
+                repliesWithProfiles.forEach((reply) => {
+                  replyMap[reply.id] = { ...reply, replies: [] }
+                })
+
+                // Second pass: organize into parent-child relationships
+                repliesWithProfiles.forEach((reply) => {
+                  if (reply.parent_id === null) {
+                    // This is a top-level reply
+                    threadedReplies.push(replyMap[reply.id])
+                  } else {
+                    // This is a child reply
+                    if (replyMap[reply.parent_id]) {
+                      if (!replyMap[reply.parent_id].replies) {
+                        replyMap[reply.parent_id].replies = []
+                      }
+                      replyMap[reply.parent_id].replies!.push(replyMap[reply.id])
+                    } else {
+                      // If parent doesn't exist (shouldn't happen), add as top-level
+                      threadedReplies.push(replyMap[reply.id])
+                    }
+                  }
+                })
+
+                repliesMap[review.id] = threadedReplies
               } else {
-                // If parent doesn't exist (shouldn't happen), add as top-level
-                threadedReplies.push(replyMap[reply.id])
+                repliesMap[review.id] = []
               }
+            } catch (error) {
+              console.error(`Error processing replies for review ${review.id}:`, error)
+              repliesMap[review.id] = []
             }
-          })
+          }),
+        )
 
-          repliesMap[review.id] = threadedReplies
-        } else {
-          repliesMap[review.id] = []
+        // Add a small delay between batches to avoid rate limiting
+        if (i + batchSize < reviewsData.length) {
+          await new Promise((resolve) => setTimeout(resolve, 300))
         }
       }
 
@@ -229,8 +274,11 @@ export function ServiceReviews({ serviceId }: ServiceReviewsProps) {
   }, [serviceId])
 
   useEffect(() => {
-    fetchInitialData()
-  }, [fetchInitialData])
+    // Only fetch data when the component is visible
+    if (isVisible) {
+      fetchInitialData()
+    }
+  }, [fetchInitialData, isVisible])
 
   // Filter reviews based on selected filter
   const filteredReviews = reviews.filter((review) => {
@@ -563,7 +611,7 @@ export function ServiceReviews({ serviceId }: ServiceReviewsProps) {
                       <StarRating value={rating} onChange={setRating} label="Overall Rating" />
                       <StarRating value={interfaceRating} onChange={setInterfaceRating} label="User Interface" />
                       <StarRating value={reliabilityRating} onChange={setReliabilityRating} label="Reliability" />
-                      <StarRating value={contentRating} onChange={setContentRating} label="Content Quality" />
+                      <StarRating value={contentRating} onChange={setRating} label="Content Quality" />
                       <StarRating value={valueRating} onChange={setValueRating} label="Value for Money" />
                     </div>
                   </div>
@@ -630,7 +678,12 @@ export function ServiceReviews({ serviceId }: ServiceReviewsProps) {
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.3 }}
               >
-                <ReviewItem review={review} serviceId={serviceId} replies={replies[review.id] || []} />
+                <ReviewItem
+                  review={review}
+                  serviceId={serviceId}
+                  replies={replies[review.id] || []}
+                  isVisible={isVisible}
+                />
               </motion.div>
             ))}
           </AnimatePresence>

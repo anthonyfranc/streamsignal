@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useCallback } from "react"
 import { Star, ThumbsUp, ThumbsDown, MessageSquare, X, Send } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
@@ -17,14 +17,80 @@ import type { Review, Reply } from "@/types/reviews"
 import { formatDistanceToNow } from "date-fns"
 import { AnimatePresence, motion } from "framer-motion"
 import { supabase } from "@/lib/supabase"
+import type { RealtimeChannel } from "@supabase/supabase-js"
 
+// Add isVisible prop to the ReviewItem component
 interface ReviewItemProps {
   review: Review
   serviceId: number
   replies: Reply[]
+  isVisible?: boolean
 }
 
-export function ReviewItem({ review, serviceId, replies: initialReplies }: ReviewItemProps) {
+// Simple debounce function
+function debounce<T extends (...args: any[]) => any>(func: T, wait: number): (...args: Parameters<T>) => void {
+  let timeout: ReturnType<typeof setTimeout> | null = null
+
+  return (...args: Parameters<T>) => {
+    if (timeout) clearTimeout(timeout)
+    timeout = setTimeout(() => func(...args), wait)
+  }
+}
+
+// Simple throttle function
+function throttle<T extends (...args: any[]) => any>(func: T, limit: number): (...args: Parameters<T>) => void {
+  let lastFunc: ReturnType<typeof setTimeout>
+  let lastRan = 0
+
+  return function (...args: Parameters<T>) {
+    const now = Date.now()
+
+    if (now - lastRan >= limit) {
+      func.apply(this, args)
+      lastRan = now
+    } else {
+      clearTimeout(lastFunc)
+      lastFunc = setTimeout(
+        () => {
+          if (Date.now() - lastRan >= limit) {
+            func.apply(this, args)
+            lastRan = Date.now()
+          }
+        },
+        limit - (now - lastRan),
+      )
+    }
+  }
+}
+
+// Add this helper function to handle Supabase API errors
+const handleSupabaseError = (error: any, fallbackMessage: string): string => {
+  // Check for rate limiting errors
+  if (error.message && error.message.includes("Too Many")) {
+    return "Rate limited by the server. Please try again in a moment."
+  }
+
+  // Return the error message or a fallback
+  return error.message || fallbackMessage
+}
+
+// Helper function to update an optimistic nested reply
+const updateOptimisticNestedReply = (replies: Reply[], replyId: number, updateFn: (reply: Reply) => Reply): Reply[] => {
+  return replies.map((reply) => {
+    if (reply.id === replyId) {
+      return updateFn(reply)
+    }
+    if (reply.replies && reply.replies.length > 0) {
+      return {
+        ...reply,
+        replies: updateOptimisticNestedReply(reply.replies, replyId, updateFn),
+      }
+    }
+    return reply
+  })
+}
+
+export function ReviewItem({ review, serviceId, replies: initialReplies, isVisible = true }: ReviewItemProps) {
   const { user, session, refreshSession } = useAuth()
   const [replyingTo, setReplyingTo] = useState<{ id: number | null; name: string } | null>(null)
   const [authModalOpen, setAuthModalOpen] = useState(false)
@@ -34,21 +100,32 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
   const [showReplies, setShowReplies] = useState(false)
   const [replyContent, setReplyContent] = useState("")
   const [localReplies, setLocalReplies] = useState<Reply[]>(initialReplies)
-  const formRef = useRef<HTMLFormElement>(null)
+  const [formRef] = useState<any>(null)
   const replyInputRef = useRef<HTMLTextAreaElement>(null)
   const newReplyRef = useRef<HTMLDivElement>(null)
   const [newReplyId, setNewReplyId] = useState<number | null>(null)
-  const [channels, setChannels] = useState<any[]>([])
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [pendingReplyIds, setPendingReplyIds] = useState<Set<number>>(new Set())
   const [optimisticReplyMap, setOptimisticReplyMap] = useState<Map<number, number>>(new Map())
+  const [isVoting, setIsVoting] = useState(false)
+
+  // Use refs to store channel instances to prevent recreation on each render
+  const replyChannelRef = useRef<RealtimeChannel | null>(null)
+  const voteChannelRef = useRef<RealtimeChannel | null>(null)
+
+  // Track processed reply IDs to prevent duplicates
+  const processedReplyIdsRef = useRef<Set<number>>(new Set())
 
   // Check authentication status
   useEffect(() => {
     const checkAuth = async () => {
-      const { data } = await supabase.auth.getSession()
-      setIsAuthenticated(!!data.session)
-      console.log("Authentication check:", !!data.session ? "Authenticated" : "Not authenticated")
+      try {
+        const { data } = await supabase.auth.getSession()
+        setIsAuthenticated(!!data.session)
+        console.log("Authentication check:", !!data.session ? "Authenticated" : "Not authenticated")
+      } catch (error) {
+        console.error("Error checking authentication:", error)
+      }
     }
 
     checkAuth()
@@ -56,16 +133,35 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
 
   // Set up real-time subscriptions
   useEffect(() => {
-    // Clean up any existing channels
-    channels.forEach((channel) => {
-      supabase.removeChannel(channel)
-    })
+    // Clean up function to remove channels
+    const cleanup = () => {
+      if (replyChannelRef.current) {
+        console.log("Removing reply channel")
+        supabase.removeChannel(replyChannelRef.current)
+        replyChannelRef.current = null
+      }
 
-    const newChannels = []
+      if (voteChannelRef.current) {
+        console.log("Removing vote channel")
+        supabase.removeChannel(voteChannelRef.current)
+        voteChannelRef.current = null
+      }
+    }
+
+    // Don't set up subscriptions if the component isn't visible
+    if (!isVisible) {
+      return cleanup
+    }
+
+    // Clean up any existing channels first
+    cleanup()
 
     // Set up real-time subscription for replies to this review
-    const replyChannel = supabase
-      .channel(`review_replies_${review.id}_${Date.now()}`)
+    const replyChannelName = `review_replies_${review.id}_${Date.now()}`
+    console.log(`Creating reply channel: ${replyChannelName}`)
+
+    replyChannelRef.current = supabase
+      .channel(replyChannelName)
       .on(
         "postgres_changes",
         {
@@ -79,6 +175,15 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
             // For new replies, fetch the user profile
             if (payload.eventType === "INSERT") {
               const reply = payload.new as Reply
+
+              // Check if we've already processed this reply ID
+              if (processedReplyIdsRef.current.has(reply.id)) {
+                console.log("Already processed reply:", reply.id)
+                return
+              }
+
+              // Add to processed set
+              processedReplyIdsRef.current.add(reply.id)
 
               // Check if this is a reply we've already handled optimistically
               if (pendingReplyIds.has(reply.id)) {
@@ -126,16 +231,20 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
               // This is a genuinely new reply from someone else
               const replyWithProfile = { ...reply, user_profile: { avatar_url: null }, replies: [] }
 
-              if (reply.user_id) {
-                const { data: profileData } = await supabase
-                  .from("user_profiles")
-                  .select("avatar_url")
-                  .eq("id", reply.user_id)
-                  .single()
+              try {
+                if (reply.user_id) {
+                  const { data: profileData } = await supabase
+                    .from("user_profiles")
+                    .select("avatar_url")
+                    .eq("id", reply.user_id)
+                    .single()
 
-                if (profileData) {
-                  replyWithProfile.user_profile = profileData
+                  if (profileData) {
+                    replyWithProfile.user_profile = profileData
+                  }
                 }
+              } catch (error) {
+                console.error("Error fetching user profile:", error)
               }
 
               // Mark this as the newest reply for animation
@@ -162,6 +271,9 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
             // For deleted replies, remove from local state
             else if (payload.eventType === "DELETE" && payload.old) {
               setLocalReplies((prev) => removeReplyFromThread(prev, (payload.old as Reply).id))
+
+              // Remove from processed set
+              processedReplyIdsRef.current.delete((payload.old as Reply).id)
             }
           }
         },
@@ -171,19 +283,16 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
         if (status === "SUBSCRIBED") {
           console.log(`Successfully subscribed to review_replies changes`)
         } else if (status === "TIMED_OUT" || status === "CLOSED") {
-          // Try to reconnect after a delay
-          setTimeout(() => {
-            console.log("Attempting to reconnect to review_replies...")
-            replyChannel.subscribe()
-          }, 2000)
+          console.log("Reply channel closed or timed out, will be recreated on next render")
         }
       })
 
-    newChannels.push(replyChannel)
-
     // Set up real-time subscription for votes on this review
-    const voteChannel = supabase
-      .channel(`review_votes_${review.id}_${Date.now()}`)
+    const voteChannelName = `review_votes_${review.id}_${Date.now()}`
+    console.log(`Creating vote channel: ${voteChannelName}`)
+
+    voteChannelRef.current = supabase
+      .channel(voteChannelName)
       .on(
         "postgres_changes",
         {
@@ -204,24 +313,13 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
         if (status === "SUBSCRIBED") {
           console.log(`Successfully subscribed to review_votes changes`)
         } else if (status === "TIMED_OUT" || status === "CLOSED") {
-          // Try to reconnect after a delay
-          setTimeout(() => {
-            console.log("Attempting to reconnect to review_votes...")
-            voteChannel.subscribe()
-          }, 2000)
+          console.log("Vote channel closed or timed out, will be recreated on next render")
         }
       })
 
-    newChannels.push(voteChannel)
-
-    setChannels(newChannels)
-
-    return () => {
-      newChannels.forEach((channel) => {
-        supabase.removeChannel(channel)
-      })
-    }
-  }, [review.id, pendingReplyIds])
+    // Return cleanup function
+    return cleanup
+  }, [review.id, isVisible]) // Add isVisible to the dependency array
 
   // Helper function to find a temporary ID for a real ID
   const findTempIdForRealId = (realId: number): number | null => {
@@ -233,8 +331,22 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
     return null
   }
 
-  // Initialize with the provided replies
+  // Initialize with the provided replies and track their IDs
   useEffect(() => {
+    // Reset the processed IDs when initialReplies changes
+    processedReplyIdsRef.current = new Set()
+
+    // Add all initial reply IDs to the processed set
+    const addReplyIdsToProcessed = (replies: Reply[]) => {
+      replies.forEach((reply) => {
+        processedReplyIdsRef.current.add(reply.id)
+        if (reply.replies && reply.replies.length > 0) {
+          addReplyIdsToProcessed(reply.replies)
+        }
+      })
+    }
+
+    addReplyIdsToProcessed(initialReplies)
     setLocalReplies(initialReplies)
   }, [initialReplies])
 
@@ -379,33 +491,33 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
       // Set as new reply for animation
       setNewReplyId(optimisticReply.id)
 
-      // Submit directly to Supabase instead of using the server action
-      const { data: insertedReply, error } = await supabase
-        .from("review_replies")
-        .insert({
-          review_id: review.id,
-          parent_id: actualParentId,
-          user_id: user.id,
-          author_name: user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0] || "User",
-          content: replyContent,
-          likes: 0,
-          dislikes: 0,
-          status: "approved", // Set to approved for immediate display
-        })
-        .select()
-        .single()
+      // Use try-catch to handle potential rate limiting
+      try {
+        // Submit directly to Supabase instead of using the server action
+        const { data: insertedReply, error } = await supabase
+          .from("review_replies")
+          .insert({
+            review_id: review.id,
+            parent_id: actualParentId,
+            user_id: user.id,
+            author_name:
+              user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0] || "User",
+            content: replyContent,
+            likes: 0,
+            dislikes: 0,
+            status: "approved", // Set to approved for immediate display
+          })
+          .select()
+          .single()
 
-      if (error) {
-        console.error("Error submitting reply:", error)
-        setErrorMessage(`Failed to save reply: ${error.message}`)
-
-        // Remove the optimistic reply
-        if (optimisticReply.parent_id === null) {
-          setLocalReplies((prev) => prev.filter((reply) => reply.id !== optimisticReply.id))
-        } else {
-          setLocalReplies((prev) => removeOptimisticNestedReply(prev, optimisticReply.id))
+        if (error) {
+          // Handle the error, possibly due to rate limiting
+          throw error
         }
-      } else {
+
+        // Add the real reply ID to the processed set to prevent duplicates
+        processedReplyIdsRef.current.add(insertedReply.id)
+
         // Clear the form after successful submission
         setReplyContent("")
         setReplyingTo(null)
@@ -443,15 +555,40 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
             }),
           )
         }
+      } catch (error: any) {
+        console.error("Error submitting reply:", error)
+
+        // Display appropriate error message based on error type
+        setErrorMessage(handleSupabaseError(error, "Failed to save reply. Please try again."))
+
+        // Even if we fail to save to the server, let's keep the optimistic reply in the UI
+        // but mark it as failed by adding a warning or styling
+        if (optimisticReply.parent_id === null) {
+          setLocalReplies((prev) =>
+            prev.map((reply) =>
+              reply.id === tempId
+                ? { ...reply, content: reply.content + " (sending failed - try again)", status: "error" as any }
+                : reply,
+            ),
+          )
+        } else {
+          setLocalReplies((prev) =>
+            updateOptimisticNestedReply(prev, tempId, (reply) => ({
+              ...reply,
+              content: reply.content + " (sending failed - try again)",
+              status: "error" as any,
+            })),
+          )
+        }
       }
 
       // Clear the new reply ID after animation
       setTimeout(() => {
         setNewReplyId(null)
       }, 3000)
-    } catch (error) {
-      console.error("Error submitting reply:", error)
-      setErrorMessage("Failed to submit reply. Please try again.")
+    } catch (error: any) {
+      console.error("Error in reply submission process:", error)
+      setErrorMessage("An unexpected error occurred. Please try again.")
     } finally {
       setIsPending(false)
     }
@@ -489,43 +626,126 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
     })
   }
 
-  const handleVote = async (voteType: "like" | "dislike") => {
-    if (!user) {
-      setAuthModalOpen(true)
-      return
-    }
+  // Update the handleVote function to use throttling instead of debouncing
+  const handleVote = useCallback(
+    throttle((voteType: "like" | "dislike") => {
+      if (!user || isVoting) {
+        if (!user) setAuthModalOpen(true)
+        return
+      }
 
-    try {
-      // Submit to server - the real-time subscription will handle the UI update
-      const formData = new FormData()
-      formData.append("reviewId", review.id.toString())
-      formData.append("voteType", voteType)
-      formData.append("serviceId", serviceId.toString())
+      setIsVoting(true)
 
-      await submitVote(formData)
-    } catch (error) {
-      console.error("Error submitting vote:", error)
-    }
-  }
+      // Optimistically update UI
+      if (voteType === "like") {
+        review.likes = (review.likes || 0) + 1
+      } else {
+        review.dislikes = (review.dislikes || 0) + 1
+      }
 
-  const handleReplyVote = async (replyId: number, voteType: "like" | "dislike") => {
-    if (!user) {
-      setAuthModalOpen(true)
-      return
-    }
+      // Force a re-render
+      setLocalReplies([...localReplies])
 
-    try {
-      // Submit to server - the real-time subscription will handle the UI update
-      const formData = new FormData()
-      formData.append("replyId", replyId.toString())
-      formData.append("voteType", voteType)
-      formData.append("serviceId", serviceId.toString())
+      // Submit to server with a slight delay to prevent rate limiting
+      setTimeout(async () => {
+        try {
+          const formData = new FormData()
+          formData.append("reviewId", review.id.toString())
+          formData.append("voteType", voteType)
+          formData.append("serviceId", serviceId.toString())
 
-      await submitVote(formData)
-    } catch (error) {
-      console.error("Error submitting vote:", error)
-    }
-  }
+          await submitVote(formData)
+        } catch (error) {
+          console.error("Error submitting vote:", error)
+          // Revert optimistic update on error
+          if (voteType === "like") {
+            review.likes = Math.max(0, (review.likes || 0) - 1)
+          } else {
+            review.dislikes = Math.max(0, (review.dislikes || 0) - 1)
+          }
+          // Force a re-render
+          setLocalReplies([...localReplies])
+        } finally {
+          setIsVoting(false)
+        }
+      }, 300)
+    }, 1000), // Throttle to one vote per second
+    [review.id, serviceId, isVoting, user, localReplies],
+  )
+
+  // Similarly update the handleReplyVote function to use throttling
+  const handleReplyVote = useCallback(
+    throttle((replyId: number, voteType: "like" | "dislike") => {
+      if (!user || isVoting) {
+        if (!user) setAuthModalOpen(true)
+        return
+      }
+
+      setIsVoting(true)
+
+      // Find the reply and optimistically update it
+      setLocalReplies((prev) => {
+        const updateReplyVote = (replies: Reply[]): Reply[] => {
+          return replies.map((reply) => {
+            if (reply.id === replyId) {
+              return {
+                ...reply,
+                likes: voteType === "like" ? (reply.likes || 0) + 1 : reply.likes,
+                dislikes: voteType === "dislike" ? (reply.dislikes || 0) + 1 : reply.dislikes,
+              }
+            }
+            if (reply.replies && reply.replies.length > 0) {
+              return {
+                ...reply,
+                replies: updateReplyVote(reply.replies),
+              }
+            }
+            return reply
+          })
+        }
+        return updateReplyVote(prev)
+      })
+
+      // Submit to server with a slight delay to prevent rate limiting
+      setTimeout(async () => {
+        try {
+          const formData = new FormData()
+          formData.append("replyId", replyId.toString())
+          formData.append("voteType", voteType)
+          formData.append("serviceId", serviceId.toString())
+
+          await submitVote(formData)
+        } catch (error) {
+          console.error("Error submitting reply vote:", error)
+          // Revert optimistic update on error
+          setLocalReplies((prev) => {
+            const revertReplyVote = (replies: Reply[]): Reply[] => {
+              return replies.map((reply) => {
+                if (reply.id === replyId) {
+                  return {
+                    ...reply,
+                    likes: voteType === "like" ? Math.max(0, (reply.likes || 0) - 1) : reply.likes,
+                    dislikes: voteType === "dislike" ? Math.max(0, (reply.dislikes || 0) - 1) : reply.dislikes,
+                  }
+                }
+                if (reply.replies && reply.replies.length > 0) {
+                  return {
+                    ...reply,
+                    replies: revertReplyVote(reply.replies),
+                  }
+                }
+                return reply
+              })
+            }
+            return revertReplyVote(prev)
+          })
+        } finally {
+          setIsVoting(false)
+        }
+      }, 300)
+    }, 1000), // Throttle to one vote per second
+    [serviceId, isVoting, user],
+  )
 
   const handleAuthSuccess = async () => {
     setAuthModalOpen(false)
@@ -671,6 +891,9 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
           // Remove the optimistic reply
           setLocalReplies((prev) => removeOptimisticNestedReply(prev, optimisticReply.id))
         } else {
+          // Add the real reply ID to the processed set to prevent duplicates
+          processedReplyIdsRef.current.add(insertedReply.id)
+
           // Add the real ID to the pending set so we ignore the realtime update
           setPendingReplyIds((prev) => {
             const newSet = new Set(prev)
@@ -799,6 +1022,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
                   reply.likes > 0 ? "text-gray-900" : "text-gray-500",
                 )}
                 onClick={() => handleReplyVote(reply.id, "like")}
+                disabled={isVoting}
               >
                 <ThumbsUp className="h-3 w-3" />
                 <span>{reply.likes > 0 ? reply.likes : "Like"}</span>
@@ -809,6 +1033,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
                   reply.dislikes > 0 ? "text-gray-900" : "text-gray-500",
                 )}
                 onClick={() => handleReplyVote(reply.id, "dislike")}
+                disabled={isVoting}
               >
                 <ThumbsDown className="h-3 w-3" />
                 <span>{reply.dislikes > 0 ? reply.dislikes : "Dislike"}</span>
@@ -832,7 +1057,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
         {reply.replies && reply.replies.length > 0 && (
           <div className="pl-4 border-l-2 border-gray-100 ml-4 mt-2">
             {reply.replies.map((childReply) => (
-              <ReplyThread key={childReply.id} reply={childReply} depth={depth + 1} />
+              <ReplyThread key={`${childReply.id}-${childReply.created_at}`} reply={childReply} depth={depth + 1} />
             ))}
           </div>
         )}
@@ -877,6 +1102,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
                   review.likes > 0 ? "text-gray-900" : "text-gray-500",
                 )}
                 onClick={() => handleVote("like")}
+                disabled={isVoting}
               >
                 <ThumbsUp className="h-3.5 w-3.5" />
                 <span>{review.likes > 0 ? review.likes : "Like"}</span>
@@ -887,6 +1113,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
                   review.dislikes > 0 ? "text-gray-900" : "text-gray-500",
                 )}
                 onClick={() => handleVote("dislike")}
+                disabled={isVoting}
               >
                 <ThumbsDown className="h-3.5 w-3.5" />
                 <span>{review.dislikes > 0 ? review.dislikes : "Dislike"}</span>
@@ -939,7 +1166,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
             {localReplies.length > 0 && (
               <div className="space-y-4 mb-4">
                 {localReplies.map((reply) => (
-                  <ReplyThread key={reply.id} reply={reply} />
+                  <ReplyThread key={`${reply.id}-${reply.created_at}`} reply={reply} />
                 ))}
               </div>
             )}
@@ -947,7 +1174,6 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
             {/* Main reply form - only show if not replying to a specific comment */}
             {user && !replyingTo && (
               <form
-                ref={formRef}
                 onSubmit={(e) => handleReplySubmit(e)}
                 className="flex items-start gap-3"
                 action="javascript:void(0);"
@@ -986,7 +1212,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies }: Revie
             {/* Sign in prompt if not logged in */}
             {!user && (
               <div
-                className="flex items-center justify-center p-3 bg-gray-50 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors"
+                className="flex items-center justify-center p-3 bg-gray-50 rounded-lg cursor:pointer hover:bg-gray-100 transition-colors"
                 onClick={() => setAuthModalOpen(true)}
               >
                 <span className="text-sm text-gray-500">Sign in to leave a comment</span>

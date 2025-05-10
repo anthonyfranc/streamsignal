@@ -99,6 +99,8 @@ export default async function ServicePage({ params, searchParams }: ServicePageP
   const contentTabLabel = getContentTabLabel()
   const showContentTab = shouldShowContentTab()
 
+  const defaultValue = "overview"
+
   return (
     <div className="container px-4 py-8 md:px-6 md:py-12">
       <Link href="/#features" className="inline-flex items-center text-sm mb-8 hover:underline">
@@ -378,7 +380,10 @@ export default async function ServicePage({ params, searchParams }: ServicePageP
             </TabsContent>
 
             <TabsContent value="reviews" className="pt-6">
-              <ServiceReviews serviceId={serviceId} />
+              <ServiceReviews
+                serviceId={serviceId}
+                isVisible={searchParams?.tab === "reviews" || (!searchParams?.tab && defaultValue === "reviews")}
+              />
             </TabsContent>
           </PersistentTabs>
         </div>
