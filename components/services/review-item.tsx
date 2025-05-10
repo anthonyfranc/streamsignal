@@ -937,7 +937,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
     }
 
     return (
-      <div className="mt-2 ml-6 mb-3">
+      <div className="mt-3 ml-6 mb-4">
         <form onSubmit={handleInlineSubmit} className="flex items-start gap-3" action="javascript:void(0);">
           <Avatar className="h-8 w-8 flex-shrink-0">
             <AvatarImage
@@ -949,13 +949,14 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
             </AvatarFallback>
           </Avatar>
           <div className="flex-1 flex items-end gap-2">
-            <div className="flex-1 relative">
-              <div className="absolute -top-6 left-0 text-xs text-gray-500 flex items-center">
+            <div className="flex-1 relative mt-2">
+              <div className="absolute -top-7 left-0 text-xs text-gray-500 flex items-center bg-gray-50 px-2 py-1 rounded-t-md shadow-sm">
                 <span>Replying to {parentName}</span>
                 <button
                   type="button"
-                  className="ml-2 text-gray-400 hover:text-gray-600"
+                  className="ml-2 text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-300 rounded-full"
                   onClick={() => setReplyingTo(null)}
+                  aria-label="Cancel reply"
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -963,7 +964,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
               <Textarea
                 ref={inlineInputRef}
                 placeholder={`Write a reply to ${parentName}...`}
-                className="min-h-[60px] py-2 px-3 resize-none"
+                className="min-h-[60px] py-2 px-3 resize-none border-gray-200 focus:border-gray-300 focus:ring-gray-200 rounded-md rounded-tl-none"
                 value={inlineReplyContent}
                 onChange={(e) => setInlineReplyContent(e.target.value)}
               />
