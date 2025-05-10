@@ -521,7 +521,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
         // Clear the form after successful submission
         setReplyContent("")
         setReplyingTo(null)
-        setSuccessMessage("Reply submitted successfully!")
+        // No success message, just reset the form
 
         // Add the real ID to the pending set so we ignore the realtime update
         setPendingReplyIds((prev) => {
@@ -993,9 +993,9 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
     return (
       <motion.div
         ref={replyRef}
-        initial={isNew ? { opacity: 0, y: -10 } : false}
-        animate={isNew ? { opacity: 1, y: 0 } : {}}
-        transition={{ duration: 0.3 }}
+        initial={isNew ? { opacity: 0, y: -10, scale: 0.95 } : false}
+        animate={isNew ? { opacity: 1, y: 0, scale: 1 } : {}}
+        transition={{ type: "spring", stiffness: 500, damping: 30 }}
         className={cn("flex flex-col", depth > 0 && "ml-6 mt-3")}
       >
         <div className="flex items-start gap-3">
@@ -1066,7 +1066,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
   }
 
   return (
-    <Card key={review.id} className="overflow-hidden mb-4">
+    <Card key={review.id} className="overflow-hidden mb-4 transition-all duration-300 hover:shadow-md">
       <CardContent className="p-0">
         <div className="flex items-start p-4 gap-4">
           <Avatar className="h-10 w-10 flex-shrink-0">
@@ -1098,7 +1098,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
             <div className="flex items-center gap-4 mt-4">
               <button
                 className={cn(
-                  "flex items-center gap-1 text-xs hover:text-gray-900 transition-colors",
+                  "flex items-center gap-1 text-xs transition-all duration-200 hover:text-gray-900 hover:scale-110",
                   review.likes > 0 ? "text-gray-900" : "text-gray-500",
                 )}
                 onClick={() => handleVote("like")}
@@ -1109,7 +1109,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
               </button>
               <button
                 className={cn(
-                  "flex items-center gap-1 text-xs hover:text-gray-900 transition-colors",
+                  "flex items-center gap-1 text-xs transition-all duration-200 hover:text-gray-900 hover:scale-110",
                   review.dislikes > 0 ? "text-gray-900" : "text-gray-500",
                 )}
                 onClick={() => handleVote("dislike")}
@@ -1119,7 +1119,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                 <span>{review.dislikes > 0 ? review.dislikes : "Dislike"}</span>
               </button>
               <button
-                className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-900 transition-colors"
+                className="flex items-center gap-1 text-xs text-gray-500 transition-all duration-200 hover:text-gray-900 hover:scale-110"
                 onClick={toggleReplies}
               >
                 <MessageSquare className="h-3.5 w-3.5" />
@@ -1200,7 +1200,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                   <Button
                     type="submit"
                     size="sm"
-                    className="h-9 w-9 p-0 rounded-full"
+                    className="h-9 w-9 p-0 rounded-full transition-all hover:scale-105 active:scale-95"
                     disabled={isPending || !replyContent.trim()}
                   >
                     {isPending ? <span className="animate-spin">⏳</span> : <Send className="h-4 w-4" />}

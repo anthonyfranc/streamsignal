@@ -390,16 +390,7 @@ export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: num
           // Hide the form after successful submission
           setShowReviewForm(false)
 
-          // Show success message
-          setFormMessage({
-            type: "success",
-            text: "Your review has been submitted successfully!",
-          })
-
-          // Clear success message after 3 seconds
-          setTimeout(() => {
-            setFormMessage(null)
-          }, 3000)
+          // No success message, just reset the form and hide it
         } else {
           setFormMessage({ type: "error", text: result.message })
           if (result.requireAuth) {
@@ -479,15 +470,42 @@ export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: num
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
         <Tabs defaultValue="all" value={reviewFilter} onValueChange={setReviewFilter} className="w-full sm:w-auto">
-          <TabsList>
-            <TabsTrigger value="all">All</TabsTrigger>
-            <TabsTrigger value="positive">Positive</TabsTrigger>
-            <TabsTrigger value="neutral">Neutral</TabsTrigger>
-            <TabsTrigger value="negative">Negative</TabsTrigger>
+          <TabsList className="transition-all">
+            <TabsTrigger value="all" className="transition-all hover:bg-gray-100 data-[state=active]:scale-105">
+              All
+            </TabsTrigger>
+            <TabsTrigger value="positive" className="transition-all hover:bg-gray-100 data-[state=active]:scale-105">
+              Positive
+            </TabsTrigger>
+            <TabsTrigger value="neutral" className="transition-all hover:bg-gray-100 data-[state=active]:scale-105">
+              Neutral
+            </TabsTrigger>
+            <TabsTrigger value="negative" className="transition-all hover:bg-gray-100 data-[state=active]:scale-105">
+              Negative
+            </TabsTrigger>
           </TabsList>
         </Tabs>
-        <Button variant="outline" onClick={toggleReviewForm}>
-          {showReviewForm && user ? "Cancel Review" : "Write a Review"}
+        <Button variant="outline" onClick={toggleReviewForm} className="relative transition-all hover:shadow-md">
+          {showReviewForm && user ? (
+            "Cancel Review"
+          ) : (
+            <>
+              Write a Review
+              <motion.span
+                className="absolute inset-0 rounded-md border-2 border-primary"
+                animate={{
+                  opacity: [0, 0.2, 0],
+                  scale: [0.8, 1.05, 1.1],
+                }}
+                transition={{
+                  repeat: Number.POSITIVE_INFINITY,
+                  repeatType: "loop",
+                  duration: 2,
+                  repeatDelay: 3,
+                }}
+              />
+            </>
+          )}
         </Button>
       </div>
 
@@ -563,10 +581,10 @@ export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: num
       <AnimatePresence>
         {user && showReviewForm && (
           <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.3 }}
+            initial={{ opacity: 0, height: 0, scale: 0.98 }}
+            animate={{ opacity: 1, height: "auto", scale: 1 }}
+            exit={{ opacity: 0, height: 0, scale: 0.98 }}
+            transition={{ type: "spring", stiffness: 300, damping: 30 }}
             className="overflow-hidden"
           >
             <Card className="border-gray-200" id="reviewForm">
@@ -680,10 +698,15 @@ export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: num
               <motion.div
                 key={review.id}
                 ref={review.id === newReviewId ? newReviewRef : undefined}
-                initial={review.id === newReviewId ? { opacity: 0, y: -20 } : { opacity: 1 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.3 }}
+                initial={review.id === newReviewId ? { opacity: 0, y: -20, scale: 0.98 } : { opacity: 1 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                transition={{
+                  type: "spring",
+                  stiffness: 500,
+                  damping: 30,
+                  mass: 1,
+                }}
               >
                 <ReviewItem
                   review={review}
