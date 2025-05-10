@@ -38,7 +38,7 @@ function debounce<T extends (...args: any[]) => any>(func: T, wait: number): (..
 }
 
 // Simple throttle function
-function throttle<T extends (...args: any[]) => any>(func: T, limit: number): (...args: Parameters<T>) => void {
+function throttle<T extends (...args: any[]) => any>(func: T, limit: number): (...args: any[]) => void {
   let lastFunc: ReturnType<typeof setTimeout>
   let lastRan = 0
 
@@ -917,8 +917,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
             }),
           )
 
-          // Show success message
-          setSuccessMessage("Reply submitted successfully!")
+          // No success message, just visual feedback through animation
         }
 
         // Clear the form and reset the replying state
@@ -969,14 +968,16 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                 onChange={(e) => setInlineReplyContent(e.target.value)}
               />
             </div>
-            <Button
-              type="submit"
-              size="sm"
-              className="h-9 w-9 p-0 rounded-full"
-              disabled={isInlinePending || !inlineReplyContent.trim()}
-            >
-              {isInlinePending ? <span className="animate-spin">⏳</span> : <Send className="h-4 w-4" />}
-            </Button>
+            <motion.div whileTap={{ scale: 0.9 }}>
+              <Button
+                type="submit"
+                size="sm"
+                className="h-9 w-9 p-0 rounded-full transition-all duration-200"
+                disabled={isInlinePending || !inlineReplyContent.trim()}
+              >
+                {isInlinePending ? <span className="animate-spin">⏳</span> : <Send className="h-4 w-4" />}
+              </Button>
+            </motion.div>
           </div>
         </form>
       </div>
@@ -997,6 +998,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
         animate={isNew ? { opacity: 1, y: 0, scale: 1 } : {}}
         transition={{ type: "spring", stiffness: 500, damping: 30 }}
         className={cn("flex flex-col", depth > 0 && "ml-6 mt-3")}
+        whileHover={{ x: 2 }}
       >
         <div className="flex items-start gap-3">
           <Avatar className="h-8 w-8 flex-shrink-0">
@@ -1007,14 +1009,35 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
             <AvatarFallback>{reply.author_name.substring(0, 2).toUpperCase()}</AvatarFallback>
           </Avatar>
           <div className="flex-1 min-w-0">
-            <div className={cn("bg-gray-50 rounded-lg p-3 relative", isNew && "bg-blue-50 animate-pulse")}>
+            <motion.div
+              className={cn("bg-gray-50 rounded-lg p-3 relative", isNew && "bg-blue-50")}
+              animate={
+                isNew
+                  ? {
+                      boxShadow: [
+                        "0 0 0 rgba(59, 130, 246, 0)",
+                        "0 0 8px rgba(59, 130, 246, 0.5)",
+                        "0 0 0 rgba(59, 130, 246, 0)",
+                      ],
+                    }
+                  : {}
+              }
+              transition={
+                isNew
+                  ? {
+                      repeat: 2,
+                      duration: 1.5,
+                    }
+                  : {}
+              }
+            >
               {depth > 0 && <div className="absolute -left-4 top-4 w-3 h-0.5 bg-gray-200"></div>}
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium">{reply.author_name}</span>
                 <span className="text-xs text-gray-500">{formatDate(reply.created_at)}</span>
               </div>
               <p className="text-sm mt-1 break-words">{reply.content}</p>
-            </div>
+            </motion.div>
             <div className="flex items-center gap-3 mt-1 ml-1">
               <button
                 className={cn(
@@ -1116,6 +1139,13 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                 disabled={isVoting}
               >
                 <ThumbsDown className="h-3.5 w-3.5" />
+                <span>{review.dislikes > 0 ? review.dislikes : "Dislike"}</span>
+              </button>
+              <button
+                className="flex items-center gap-1 text-xs text-gray-500 transition-all duration-200 hover:text-gray-900 hover:scale-110"
+                onClick={toggleReplies}
+              >
+                <ThumbsUp className="h-3.5 w-3.5" />
                 <span>{review.dislikes > 0 ? review.dislikes : "Dislike"}</span>
               </button>
               <button
