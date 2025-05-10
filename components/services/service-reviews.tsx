@@ -38,6 +38,7 @@ export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: num
   const [loading, setLoading] = useState(true)
   const [newReviewId, setNewReviewId] = useState<number | null>(null)
   const newReviewRef = useRef<HTMLDivElement>(null)
+  const hasInitializedRef = useRef(false)
 
   // Form state
   const [rating, setRating] = useState(0)
@@ -124,6 +125,9 @@ export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: num
 
   // Initial data fetch
   const fetchInitialData = useCallback(async () => {
+    // Skip if we've already initialized
+    if (hasInitializedRef.current) return
+
     try {
       setLoading(true)
 
@@ -266,6 +270,7 @@ export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: num
       }
 
       setReplies(repliesMap)
+      hasInitializedRef.current = true
     } catch (error) {
       console.error("Error fetching data:", error)
     } finally {
@@ -274,11 +279,13 @@ export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: num
   }, [serviceId])
 
   useEffect(() => {
-    // Only fetch data when the component is visible
-    if (isVisible) {
+    // Only fetch data when the component is visible and we haven't initialized yet
+    if (isVisible && !hasInitializedRef.current) {
       fetchInitialData()
     }
   }, [fetchInitialData, isVisible])
+
+  // Rest of the component remains the same...
 
   // Filter reviews based on selected filter
   const filteredReviews = reviews.filter((review) => {
@@ -611,7 +618,7 @@ export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: num
                       <StarRating value={rating} onChange={setRating} label="Overall Rating" />
                       <StarRating value={interfaceRating} onChange={setInterfaceRating} label="User Interface" />
                       <StarRating value={reliabilityRating} onChange={setReliabilityRating} label="Reliability" />
-                      <StarRating value={contentRating} onChange={setRating} label="Content Quality" />
+                      <StarRating value={contentRating} onChange={setContentRating} label="Content Quality" />
                       <StarRating value={valueRating} onChange={setValueRating} label="Value for Money" />
                     </div>
                   </div>
