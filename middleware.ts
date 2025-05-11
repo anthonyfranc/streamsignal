@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server"
-import { createMiddlewareClient } from "./lib/supabase-client-factory"
+import { createServerClient } from "@supabase/ssr"
 
 export async function middleware(request: NextRequest) {
   // Create a response object
@@ -15,29 +15,65 @@ export async function middleware(request: NextRequest) {
   }
 
   try {
-    // Create a Supabase client for the middleware
-    const supabase = createMiddlewareClient(request, response)
+    console.log("Middleware processing request:", request.nextUrl.pathname)
 
-    // This is critical: get the session and refresh it if needed
+    // Debug: Log cookies from request
+    const cookieHeader = request.headers.get("cookie") || ""
+    console.log("Cookie header present:", !!cookieHeader)
+
+    // Create a Supabase client for the middleware
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          get(name: string) {
+            const value = request.cookies.get(name)?.value
+            console.log(`Middleware cookie get: ${name}, found: ${!!value}`)
+            return value
+          },
+          set(name: string, value: string, options: any) {
+            // This is the crucial part - we're setting cookies in the response
+            console.log(`Middleware setting cookie: ${name}`)
+            response.cookies.set({
+              name,
+              value,
+              ...options,
+              // Ensure cookies are accessible to both client and server
+              httpOnly: false,
+              sameSite: "lax",
+              path: "/",
+            })
+          },
+          remove(name: string, options: any) {
+            console.log(`Middleware removing cookie: ${name}`)
+            response.cookies.delete({
+              name,
+              ...options,
+            })
+          },
+        },
+      },
+    )
+
+    // First check if we have a session
+    console.log("Checking for existing session...")
     const {
       data: { session },
     } = await supabase.auth.getSession()
 
-    // If we have a session, refresh the user data
-    // This will automatically update the auth cookies if needed
+    // If we have a session, try to refresh it
     if (session) {
+      console.log("Session found, refreshing user data...")
       await supabase.auth.getUser()
-    }
+      // The above call will automatically refresh the session if needed
+      // and update cookies via the set() function we provided
 
-    // For debugging: add a custom header to indicate auth status
-    response.headers.set("x-auth-status", session ? "authenticated" : "unauthenticated")
-
-    // For protected routes, redirect to login if not authenticated
-    const protectedRoutes = ["/admin", "/profile"]
-    if (protectedRoutes.some((route) => request.nextUrl.pathname.startsWith(route)) && !session) {
-      const redirectUrl = new URL("/login", request.url)
-      redirectUrl.searchParams.set("redirect", request.nextUrl.pathname)
-      return NextResponse.redirect(redirectUrl)
+      // Add a custom header to indicate auth status
+      response.headers.set("x-auth-status", "authenticated")
+    } else {
+      console.log("No session found in middleware")
+      response.headers.set("x-auth-status", "unauthenticated")
     }
   } catch (error) {
     console.error("Auth middleware error:", error)

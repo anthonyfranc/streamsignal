@@ -1,12 +1,59 @@
-import { createServerComponentClient } from "./supabase-client-factory"
-import { cache } from "react"
+import { createServerClient } from "@supabase/ssr"
+import { cookies } from "next/headers"
+import type { Database } from "@/types/database"
 
-// Use React cache to prevent multiple calls to getServerUser within the same render cycle
-export const getServerUser = cache(async () => {
+/**
+ * Gets the current authenticated user from the server
+ * This is the ONLY reliable way to get the user on the server
+ */
+export async function getServerUser() {
   try {
-    const supabase = createServerComponentClient()
+    // Get the cookie store
+    const cookieStore = cookies()
+
+    // Debug: Log all available cookies (names only for security)
+    const allCookies = cookieStore.getAll().map((c) => c.name)
+    console.log("Available cookies in getServerUser:", allCookies)
+
+    // Check specifically for Supabase auth cookie
+    const authCookie = cookieStore.get("sb-" + process.env.NEXT_PUBLIC_SUPABASE_PROJECT_REF + "-auth-token")
+    console.log("Auth cookie present:", !!authCookie)
+
+    // Create a properly configured Supabase client
+    const supabase = createServerClient<Database>(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          get(name: string) {
+            const cookie = cookieStore.get(name)
+            console.log(`Cookie requested: ${name}, found: ${!!cookie}`)
+            return cookie?.value
+          },
+          set(name: string, value: string, options: any) {
+            try {
+              cookieStore.set({ name, value, ...options })
+              console.log(`Cookie set: ${name}`)
+            } catch (error) {
+              // Expected error in Server Components
+              console.log(`Cannot set cookie in Server Component: ${name}`)
+            }
+          },
+          remove(name: string, options: any) {
+            try {
+              cookieStore.delete({ name, ...options })
+              console.log(`Cookie removed: ${name}`)
+            } catch (error) {
+              // Expected error in Server Components
+              console.log(`Cannot delete cookie in Server Component: ${name}`)
+            }
+          },
+        },
+      },
+    )
 
     // Use getUser() to validate the token
+    console.log("Calling supabase.auth.getUser()...")
     const { data, error } = await supabase.auth.getUser()
 
     if (error) {
@@ -14,18 +61,20 @@ export const getServerUser = cache(async () => {
       return { user: null, error }
     }
 
+    console.log("User retrieved successfully:", !!data.user)
     return { user: data.user, error: null }
   } catch (err) {
     console.error("Exception in getServerUser:", err)
     return { user: null, error: err }
   }
-})
+}
 
 /**
  * Verifies if a user is authenticated on the server
  * Returns the user ID if authenticated, null otherwise
  */
 export async function verifyServerAuth() {
+  console.log("Starting verifyServerAuth...")
   const { user, error } = await getServerUser()
 
   if (error) {
@@ -38,27 +87,6 @@ export async function verifyServerAuth() {
     return null
   }
 
+  console.log("User authenticated:", user.id.substring(0, 8) + "...")
   return user.id
-}
-
-/**
- * Gets the user's profile data
- * Returns the profile data if available, null otherwise
- */
-export async function getUserProfile(userId: string) {
-  try {
-    const supabase = createServerComponentClient()
-
-    const { data, error } = await supabase.from("user_profiles").select("*").eq("id", userId).single()
-
-    if (error) {
-      console.error("Error getting user profile:", error.message)
-      return null
-    }
-
-    return data
-  } catch (err) {
-    console.error("Exception in getUserProfile:", err)
-    return null
-  }
 }
