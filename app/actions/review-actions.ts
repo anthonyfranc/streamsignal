@@ -11,18 +11,19 @@ export async function submitServiceReview(
     const cookieStore = cookies()
     const supabase = createServerClient(cookieStore)
 
-    // Check if user is authenticated
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
+    // Check if user is authenticated using getUser() instead of getSession()
+    const { data: userData, error: userError } = await supabase.auth.getUser()
 
-    if (!session) {
+    if (userError || !userData.user) {
+      console.error("Authentication error in submitServiceReview:", userError)
       return {
         success: false,
         message: "You must be logged in to submit a review",
         requireAuth: true,
       }
     }
+
+    const user = userData.user
 
     // Extract and validate data
     const serviceId = Number.parseInt(formData.get("serviceId") as string)
@@ -35,21 +36,17 @@ export async function submitServiceReview(
     const valueRating = Number.parseInt(formData.get("valueRating") as string)
 
     // Get user's name from their profile
-    let authorName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || ""
+    let authorName = user.user_metadata?.full_name || user.user_metadata?.name || ""
 
     // If no name is found in metadata, try to get it from user_profiles
     if (!authorName) {
-      const { data: profileData } = await supabase
-        .from("user_profiles")
-        .select("full_name")
-        .eq("id", session.user.id)
-        .single()
+      const { data: profileData } = await supabase.from("user_profiles").select("full_name").eq("id", user.id).single()
 
       if (profileData && profileData.full_name) {
         authorName = profileData.full_name
       } else {
         // Fallback to email username if no name is found
-        authorName = session.user.email?.split("@")[0] || "User"
+        authorName = user.email?.split("@")[0] || "User"
       }
     }
 
@@ -75,7 +72,7 @@ export async function submitServiceReview(
       .from("service_reviews")
       .select("id")
       .eq("service_id", serviceId)
-      .eq("user_id", session.user.id)
+      .eq("user_id", user.id)
       .single()
 
     if (existingReview) {
@@ -87,7 +84,7 @@ export async function submitServiceReview(
       .from("service_reviews")
       .insert({
         service_id: serviceId,
-        user_id: session.user.id,
+        user_id: user.id,
         author_name: authorName,
         title,
         content,

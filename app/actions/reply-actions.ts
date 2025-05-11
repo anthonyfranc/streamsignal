@@ -11,19 +11,19 @@ export async function submitReviewReply(
     const cookieStore = cookies()
     const supabase = createServerClient(cookieStore)
 
-    // Check if user is authenticated
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
+    // Check if user is authenticated using getUser() instead of getSession()
+    const { data: userData, error: userError } = await supabase.auth.getUser()
 
-    if (!session) {
-      console.error("No session found in server action")
+    if (userError || !userData.user) {
+      console.error("Authentication error in submitReviewReply:", userError)
       return {
         success: false,
         message: "You must be logged in to submit a reply",
         requireAuth: true,
       }
     }
+
+    const user = userData.user
 
     // Extract and validate data
     const reviewId = Number.parseInt(formData.get("reviewId") as string)
@@ -32,21 +32,17 @@ export async function submitReviewReply(
     const parentId = formData.get("parentId") ? Number.parseInt(formData.get("parentId") as string) : null
 
     // Get user's name from their profile
-    let authorName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || ""
+    let authorName = user.user_metadata?.full_name || user.user_metadata?.name || ""
 
     // If no name is found in metadata, try to get it from user_profiles
     if (!authorName) {
-      const { data: profileData } = await supabase
-        .from("user_profiles")
-        .select("full_name")
-        .eq("id", session.user.id)
-        .single()
+      const { data: profileData } = await supabase.from("user_profiles").select("full_name").eq("id", user.id).single()
 
       if (profileData && profileData.full_name) {
         authorName = profileData.full_name
       } else {
         // Fallback to email username if no name is found
-        authorName = session.user.email?.split("@")[0] || "User"
+        authorName = user.email?.split("@")[0] || "User"
       }
     }
 
@@ -82,7 +78,7 @@ export async function submitReviewReply(
       .insert({
         review_id: reviewId,
         parent_id: parentId,
-        user_id: session.user.id,
+        user_id: user.id,
         author_name: authorName,
         content,
         likes: 0,
