@@ -13,6 +13,7 @@ export async function submitVote(formData: FormData) {
 
     const reviewId = formData.get("reviewId") as string
     const voteType = formData.get("voteType") as string
+    const serviceId = formData.get("serviceId") as string
 
     if (!reviewId || !voteType) {
       return { success: false, error: "Missing required fields" }
@@ -88,7 +89,9 @@ export async function submitVote(formData: FormData) {
       console.error("Error updating review vote counts:", updateReviewError)
     }
 
-    revalidatePath("/services/[id]")
+    if (serviceId) {
+      revalidatePath(`/services/${serviceId}`)
+    }
 
     return {
       success: true,

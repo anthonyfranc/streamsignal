@@ -61,3 +61,12 @@ export async function getSession() {
     return null
   }
 }
+
+/**
+ * Verifies if a user is authenticated on the server
+ * Returns the user ID if authenticated, null otherwise
+ */
+export async function verifyServerAuth() {
+  const user = await getUser()
+  return user?.id || null
+}
