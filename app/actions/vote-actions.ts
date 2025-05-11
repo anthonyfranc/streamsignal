@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache"
 import { createServerClient } from "@/lib/supabase-server"
 import { cookies } from "next/headers"
-import { verifyServerAuth } from "@/lib/server-auth"
+import { getServerUser } from "@/lib/server-auth"
 
 // Add a delay function for rate limiting
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -12,16 +12,25 @@ export async function submitVote(
   formData: FormData,
 ): Promise<{ success: boolean; message: string; requireAuth?: boolean }> {
   try {
-    // Get the user ID directly from the server auth verification
-    // This now uses getUser() internally which is reliable according to Supabase docs
-    const userId = await verifyServerAuth()
+    console.log("Starting submitVote server action")
 
-    // Log authentication status for debugging
-    console.log(
-      `Server auth check result: ${userId ? "Authenticated as " + userId.substring(0, 8) + "..." : "Not authenticated"}`,
-    )
+    // Get the user directly using getServerUser for more detailed debugging
+    const { user, error: userError } = await getServerUser()
 
-    if (!userId) {
+    // Log detailed authentication information
+    if (user) {
+      console.log(`User authenticated: ${user.id.substring(0, 8)}...`)
+
+      // Check token expiration
+      const exp = user.exp || 0
+      const now = Math.floor(Date.now() / 1000)
+      const isExpired = exp < now
+      const expiresIn = exp - now
+
+      console.log(`Token status: ${isExpired ? "EXPIRED" : "VALID"}, expires in ${expiresIn}s`)
+    } else {
+      console.error(`Authentication failed: ${userError?.message || "No user found"}`)
+
       return {
         success: false,
         message: "You must be logged in to vote",
@@ -39,6 +48,8 @@ export async function submitVote(
     const voteType = formData.get("voteType") as "like" | "dislike"
     const serviceId = Number.parseInt(formData.get("serviceId") as string)
 
+    console.log(`Vote data: reviewId=${reviewId}, replyId=${replyId}, voteType=${voteType}, serviceId=${serviceId}`)
+
     // Basic validation
     if (!reviewId && !replyId) {
       return { success: false, message: "Either reviewId or replyId must be provided" }
@@ -53,16 +64,22 @@ export async function submitVote(
     let existingVoteError
 
     try {
+      console.log("Checking for existing vote")
       const response = await supabase
         .from("review_votes")
         .select("*")
-        .eq("user_id", userId)
+        .eq("user_id", user.id)
         .eq(reviewId ? "review_id" : "reply_id", reviewId || replyId)
         .is(reviewId ? "reply_id" : "review_id", null)
         .single()
 
       existingVote = response.data
       existingVoteError = response.error
+
+      console.log(`Existing vote check: ${existingVote ? "Found" : "Not found"}`)
+      if (existingVoteError && existingVoteError.code !== "PGRST116") {
+        console.error("Error checking existing vote:", existingVoteError)
+      }
     } catch (error) {
       // If we hit a rate limit, wait and try again
       if (error instanceof Error && error.message.includes("Too Many Requests")) {
@@ -72,7 +89,7 @@ export async function submitVote(
         const response = await supabase
           .from("review_votes")
           .select("*")
-          .eq("user_id", userId)
+          .eq("user_id", user.id)
           .eq(reviewId ? "review_id" : "reply_id", reviewId || replyId)
           .is(reviewId ? "reply_id" : "review_id", null)
           .single()
@@ -80,6 +97,7 @@ export async function submitVote(
         existingVote = response.data
         existingVoteError = response.error
       } else {
+        console.error("Exception checking existing vote:", error)
         throw error
       }
     }
@@ -87,6 +105,7 @@ export async function submitVote(
     // If there's an existing vote of the same type, remove it (toggle behavior)
     if (existingVote && existingVote.vote_type === voteType) {
       try {
+        console.log(`Removing existing vote (id: ${existingVote.id})`)
         const { error: deleteError } = await supabase.from("review_votes").delete().eq("id", existingVote.id)
 
         if (deleteError) {
@@ -106,6 +125,7 @@ export async function submitVote(
             return { success: false, message: "Failed to remove vote. Please try again." }
           }
         } else {
+          console.error("Exception removing vote:", error)
           throw error
         }
       }
@@ -123,6 +143,7 @@ export async function submitVote(
     // If there's an existing vote of a different type, update it
     if (existingVote) {
       try {
+        console.log(`Updating existing vote (id: ${existingVote.id}) from ${existingVote.vote_type} to ${voteType}`)
         const { error: updateError } = await supabase
           .from("review_votes")
           .update({ vote_type: voteType })
@@ -148,16 +169,18 @@ export async function submitVote(
             return { success: false, message: "Failed to update vote. Please try again." }
           }
         } else {
+          console.error("Exception updating vote:", error)
           throw error
         }
       }
     } else {
       // Otherwise, insert a new vote
       try {
+        console.log("Inserting new vote")
         const { error: insertError } = await supabase.from("review_votes").insert({
           review_id: reviewId,
           reply_id: replyId,
-          user_id: userId,
+          user_id: user.id,
           vote_type: voteType,
         })
 
@@ -174,7 +197,7 @@ export async function submitVote(
           const { error: insertError } = await supabase.from("review_votes").insert({
             review_id: reviewId,
             reply_id: replyId,
-            user_id: userId,
+            user_id: user.id,
             vote_type: voteType,
           })
 
@@ -183,6 +206,7 @@ export async function submitVote(
             return { success: false, message: "Failed to submit vote. Please try again." }
           }
         } else {
+          console.error("Exception inserting vote:", error)
           throw error
         }
       }
@@ -200,6 +224,7 @@ export async function submitVote(
       revalidatePath(`/services/${serviceId}`)
     }
 
+    console.log("Vote submitted successfully")
     return { success: true, message: "Vote submitted successfully" }
   } catch (error) {
     console.error("Error in submitVote:", error)
