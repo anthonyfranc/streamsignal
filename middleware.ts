@@ -107,10 +107,11 @@ export async function middleware(request: NextRequest) {
 // Configure which paths should be processed by this middleware
 export const config = {
   matcher: [
-    // Match all paths except for:
+    // Match all App Router paths except for:
     // - API routes
     // - Static files (images, etc)
     // - Next.js internals
-    "/((?!api|_next/static|_next/image|favicon.ico).*)",
+    // - Pages Router routes
+    "/((?!api|_next/static|_next/image|favicon.ico|pages/).*)",
   ],
 }
