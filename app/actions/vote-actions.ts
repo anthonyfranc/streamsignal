@@ -1,7 +1,7 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { createServerClient } from "@/lib/supabase-server"
+import { createServerClient } from "@supabase/ssr"
 import { cookies } from "next/headers"
 import { verifyServerAuth } from "@/lib/server-auth"
 
@@ -12,9 +12,22 @@ export async function submitVote(
   formData: FormData,
 ): Promise<{ success: boolean; message: string; requireAuth?: boolean }> {
   try {
-    // Get the user ID directly from the server auth verification
-    // This now uses getUser() internally which is reliable according to Supabase docs
-    const userId = await verifyServerAuth()
+    // Add more detailed logging
+    console.log("Starting vote submission process...")
+
+    // Get the user ID with better error handling
+    let userId
+    try {
+      userId = await verifyServerAuth()
+      console.log(`Auth verification result: ${userId ? "Success" : "Failed"}`)
+    } catch (authError) {
+      console.error("Authentication verification error:", authError)
+      return {
+        success: false,
+        message: "Authentication error. Please try logging in again.",
+        requireAuth: true,
+      }
+    }
 
     // Log authentication status for debugging
     console.log(
@@ -22,6 +35,7 @@ export async function submitVote(
     )
 
     if (!userId) {
+      console.log("No user ID returned from auth verification")
       return {
         success: false,
         message: "You must be logged in to vote",
@@ -31,7 +45,33 @@ export async function submitVote(
 
     // Create a Supabase client with the cookies
     const cookieStore = cookies()
-    const supabase = createServerClient(cookieStore)
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          get(name: string) {
+            return cookieStore.get(name)?.value
+          },
+          set(name: string, value: string, options: any) {
+            try {
+              cookieStore.set({ name, value, ...options })
+            } catch (error) {
+              // Expected error in Server Components
+              console.debug("Cannot set cookie in Server Component - this is normal")
+            }
+          },
+          remove(name: string, options: any) {
+            try {
+              cookieStore.delete({ name, ...options })
+            } catch (error) {
+              // Expected error in Server Components
+              console.debug("Cannot delete cookie in Server Component - this is normal")
+            }
+          },
+        },
+      },
+    )
 
     // Extract and validate data
     const reviewId = formData.get("reviewId") ? Number.parseInt(formData.get("reviewId") as string) : null

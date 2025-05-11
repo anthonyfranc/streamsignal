@@ -1,18 +1,45 @@
-import { createServerClient } from "@/lib/supabase-server"
+import { createServerClient } from "@supabase/ssr"
 import { cookies } from "next/headers"
+import type { Database } from "@/types/database"
 
 /**
  * Gets the current authenticated user from the server
  * This is the ONLY reliable way to get the user on the server
- * According to Supabase docs, getSession() is not reliable in Server Components
  */
 export async function getServerUser() {
   try {
     const cookieStore = cookies()
-    const supabase = createServerClient(cookieStore)
 
-    // Use getUser() instead of getSession() as per Supabase documentation
-    // getUser() sends a request to the Supabase Auth server every time to revalidate the Auth token
+    // Create a properly configured Supabase client
+    const supabase = createServerClient<Database>(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          get(name: string) {
+            return cookieStore.get(name)?.value
+          },
+          set(name: string, value: string, options: any) {
+            try {
+              cookieStore.set({ name, value, ...options })
+            } catch (error) {
+              // Expected error in Server Components
+              console.debug("Cannot set cookie in Server Component - this is normal")
+            }
+          },
+          remove(name: string, options: any) {
+            try {
+              cookieStore.delete({ name, ...options })
+            } catch (error) {
+              // Expected error in Server Components
+              console.debug("Cannot delete cookie in Server Component - this is normal")
+            }
+          },
+        },
+      },
+    )
+
+    // Use getUser() to validate the token
     const { data, error } = await supabase.auth.getUser()
 
     if (error) {

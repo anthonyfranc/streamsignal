@@ -1,116 +1,123 @@
 "use server"
 import { cookies } from "next/headers"
-import { createServerClient } from "@/lib/supabase-server"
+import { createServerClient } from "@supabase/ssr"
+import { revalidatePath } from "next/cache"
+import { verifyServerAuth } from "@/lib/server-auth"
 import type { Reply } from "@/types/reviews"
 
-export async function submitReviewReply(
+export async function submitReply(
   formData: FormData,
 ): Promise<{ success: boolean; message: string; requireAuth?: boolean; replyId?: number }> {
   try {
-    // Create a Supabase client with the cookies
-    const cookieStore = cookies()
-    const supabase = createServerClient(cookieStore)
+    console.log("Starting reply submission process...")
 
-    // Check if user is authenticated
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-
-    if (!session) {
-      console.error("No session found in server action")
+    // Get the user ID with better error handling
+    let userId
+    try {
+      userId = await verifyServerAuth()
+      console.log(`Auth verification result: ${userId ? "Success" : "Failed"}`)
+    } catch (authError) {
+      console.error("Authentication verification error:", authError)
       return {
         success: false,
-        message: "You must be logged in to submit a reply",
+        message: "Authentication error. Please try logging in again.",
         requireAuth: true,
       }
     }
 
-    // Extract and validate data
-    const reviewId = Number.parseInt(formData.get("reviewId") as string)
-    const content = formData.get("content") as string
-    const serviceId = Number.parseInt(formData.get("serviceId") as string)
-    const parentId = formData.get("parentId") ? Number.parseInt(formData.get("parentId") as string) : null
-
-    // Get user's name from their profile
-    let authorName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || ""
-
-    // If no name is found in metadata, try to get it from user_profiles
-    if (!authorName) {
-      const { data: profileData } = await supabase
-        .from("user_profiles")
-        .select("full_name")
-        .eq("id", session.user.id)
-        .single()
-
-      if (profileData && profileData.full_name) {
-        authorName = profileData.full_name
-      } else {
-        // Fallback to email username if no name is found
-        authorName = session.user.email?.split("@")[0] || "User"
+    if (!userId) {
+      console.log("No user ID returned from auth verification")
+      return {
+        success: false,
+        message: "You must be logged in to reply",
+        requireAuth: true,
       }
     }
 
-    // Basic validation
+    // Create a Supabase client with the cookies
+    const cookieStore = cookies()
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          get(name: string) {
+            return cookieStore.get(name)?.value
+          },
+          set(name: string, value: string, options: any) {
+            try {
+              cookieStore.set({ name, value, ...options })
+            } catch (error) {
+              // Expected error in Server Components
+              console.debug("Cannot set cookie in Server Component - this is normal")
+            }
+          },
+          remove(name: string, options: any) {
+            try {
+              cookieStore.delete({ name, ...options })
+            } catch (error) {
+              // Expected error in Server Components
+              console.debug("Cannot delete cookie in Server Component - this is normal")
+            }
+          },
+        },
+      },
+    )
+
+    // Extract data from the form
+    const reviewId = Number.parseInt(formData.get("reviewId") as string)
+    const content = formData.get("content") as string
+    const serviceId = Number.parseInt(formData.get("serviceId") as string)
+
+    // Validate the data
     if (!reviewId || isNaN(reviewId)) {
       return { success: false, message: "Invalid review ID" }
     }
 
-    if (!content || content.trim().length < 1) {
-      return { success: false, message: "Please provide reply content" }
+    if (!content || content.trim().length === 0) {
+      return { success: false, message: "Reply content cannot be empty" }
     }
 
-    // If parentId is provided, verify it exists and belongs to the same review
-    if (parentId) {
-      const { data: parentReply, error: parentError } = await supabase
-        .from("review_replies")
-        .select("review_id")
-        .eq("id", parentId)
-        .single()
-
-      if (parentError || !parentReply) {
-        return { success: false, message: "Invalid parent reply" }
-      }
-
-      if (parentReply.review_id !== reviewId) {
-        return { success: false, message: "Parent reply does not belong to this review" }
-      }
-    }
-
-    // Insert reply into database
-    const { data: insertedReply, error } = await supabase
+    // Insert the reply
+    const { data: reply, error } = await supabase
       .from("review_replies")
       .insert({
         review_id: reviewId,
-        parent_id: parentId,
-        user_id: session.user.id,
-        author_name: authorName,
-        content,
-        likes: 0,
-        dislikes: 0,
-        status: "approved", // Set to approved for immediate display
+        user_id: userId,
+        content: content.trim(),
+        created_at: new Date().toISOString(),
       })
-      .select()
+      .select("id")
       .single()
 
     if (error) {
       console.error("Error submitting reply:", error)
-      return {
-        success: false,
-        message: "Failed to submit reply. Please try again.",
-      }
+      return { success: false, message: "Failed to submit reply. Please try again." }
+    }
+
+    // Update the reply count on the review
+    const { error: updateError } = await supabase.rpc("increment_reply_count", {
+      review_id_param: reviewId,
+    })
+
+    if (updateError) {
+      console.error("Error updating reply count:", updateError)
+      // Don't return an error here, as the reply was successfully created
+    }
+
+    // Revalidate the service page
+    if (serviceId && !isNaN(serviceId)) {
+      revalidatePath(`/services/${serviceId}`)
     }
 
     return {
       success: true,
-      message: "Your reply has been submitted successfully!",
-      replyId: insertedReply.id,
+      message: "Reply submitted successfully",
+      replyId: reply?.id,
     }
   } catch (error) {
-    console.error("Error in submitReviewReply:", error)
-    return {
-      success: false,
-      message: "An unexpected error occurred. Please try again.",
-    }
+    console.error("Error in submitReply:", error)
+    return { success: false, message: "An unexpected error occurred. Please try again." }
   }
 }
 

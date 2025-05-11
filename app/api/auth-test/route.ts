@@ -24,6 +24,7 @@ export async function POST(request: NextRequest) {
           cookiesCount: allCookies.length,
           // Don't include full cookie values in response for security
           cookieNames: cookieStore.getAll().map((c) => c.name),
+          authMethod: "getUser()",
         },
       })
     } else {
@@ -35,6 +36,7 @@ export async function POST(request: NextRequest) {
           cookiesCount: allCookies.length,
           // Don't include full cookie values in response for security
           cookieNames: cookieStore.getAll().map((c) => c.name),
+          authMethod: "getUser()",
         },
       })
     }
