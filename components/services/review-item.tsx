@@ -658,9 +658,6 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
       // Submit to server with a slight delay to prevent rate limiting
       setTimeout(async () => {
         try {
-          // Ensure we have a fresh session before submitting the vote
-          await refreshSession()
-
           const formData = new FormData()
           formData.append("reviewId", review.id.toString())
           formData.append("voteType", voteType)
@@ -669,10 +666,6 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
           const result = await submitVote(formData)
 
           if (!result.success) {
-            if (result.requireAuth) {
-              // Session expired or not valid on server
-              setAuthModalOpen(true)
-            }
             throw new Error(result.message || "Failed to submit vote")
           }
 
@@ -690,7 +683,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
         }
       }, 300)
     }, 1000), // Throttle to one vote per second
-    [review.id, serviceId, isVoting, user, localReplies, refreshSession],
+    [review.id, serviceId, isVoting, user, localReplies],
   )
 
   // Similarly update the handleReplyVote function
@@ -734,9 +727,6 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
       // Submit to server with a slight delay to prevent rate limiting
       setTimeout(async () => {
         try {
-          // Ensure we have a fresh session before submitting the vote
-          await refreshSession()
-
           const formData = new FormData()
           formData.append("replyId", replyId.toString())
           formData.append("voteType", voteType)
@@ -745,10 +735,6 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
           const result = await submitVote(formData)
 
           if (!result.success) {
-            if (result.requireAuth) {
-              // Session expired or not valid on server
-              setAuthModalOpen(true)
-            }
             throw new Error(result.message || "Failed to submit vote")
           }
 
@@ -763,7 +749,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
         }
       }, 300)
     }, 1000), // Throttle to one vote per second
-    [serviceId, isVoting, user, localReplies, refreshSession],
+    [serviceId, isVoting, user, localReplies],
   )
 
   const handleAuthSuccess = async () => {
