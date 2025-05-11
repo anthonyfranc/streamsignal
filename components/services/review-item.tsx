@@ -371,8 +371,11 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
 
       if (data && !error) {
         // Update the review's vote counts
-        review.likes = data.likes
-        review.dislikes = data.dislikes
+        review.likes = data.likes || 0
+        review.dislikes = data.dislikes || 0
+
+        // Force a re-render to update the UI
+        setLocalReplies([...localReplies])
       }
     } catch (error) {
       console.error("Error fetching review vote counts:", error)
@@ -636,11 +639,15 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
 
       setIsVoting(true)
 
+      // Get current values for potential rollback
+      const currentLikes = review.likes || 0
+      const currentDislikes = review.dislikes || 0
+
       // Optimistically update UI
       if (voteType === "like") {
-        review.likes = (review.likes || 0) + 1
+        review.likes = currentLikes + 1
       } else {
-        review.dislikes = (review.dislikes || 0) + 1
+        review.dislikes = currentDislikes + 1
       }
 
       // Force a re-render
@@ -654,15 +661,19 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
           formData.append("voteType", voteType)
           formData.append("serviceId", serviceId.toString())
 
-          await submitVote(formData)
+          const result = await submitVote(formData)
+
+          if (!result.success) {
+            throw new Error(result.message || "Failed to submit vote")
+          }
+
+          // Fetch the latest vote counts to ensure UI is in sync
+          await fetchReviewVoteCounts()
         } catch (error) {
           console.error("Error submitting vote:", error)
           // Revert optimistic update on error
-          if (voteType === "like") {
-            review.likes = Math.max(0, (review.likes || 0) - 1)
-          } else {
-            review.dislikes = Math.max(0, (review.dislikes || 0) - 1)
-          }
+          review.likes = currentLikes
+          review.dislikes = currentDislikes
           // Force a re-render
           setLocalReplies([...localReplies])
         } finally {
@@ -682,6 +693,9 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
       }
 
       setIsVoting(true)
+
+      // Store the current state for potential rollback
+      const currentReplies = [...localReplies]
 
       // Find the reply and optimistically update it
       setLocalReplies((prev) => {
@@ -714,37 +728,24 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
           formData.append("voteType", voteType)
           formData.append("serviceId", serviceId.toString())
 
-          await submitVote(formData)
+          const result = await submitVote(formData)
+
+          if (!result.success) {
+            throw new Error(result.message || "Failed to submit vote")
+          }
+
+          // We could fetch the latest vote counts here, but for replies
+          // we'll rely on the optimistic update for now
         } catch (error) {
           console.error("Error submitting reply vote:", error)
-          // Revert optimistic update on error
-          setLocalReplies((prev) => {
-            const revertReplyVote = (replies: Reply[]): Reply[] => {
-              return replies.map((reply) => {
-                if (reply.id === replyId) {
-                  return {
-                    ...reply,
-                    likes: voteType === "like" ? Math.max(0, (reply.likes || 0) - 1) : reply.likes,
-                    dislikes: voteType === "dislike" ? Math.max(0, (reply.dislikes || 0) - 1) : reply.dislikes,
-                  }
-                }
-                if (reply.replies && reply.replies.length > 0) {
-                  return {
-                    ...reply,
-                    replies: revertReplyVote(reply.replies),
-                  }
-                }
-                return reply
-              })
-            }
-            return revertReplyVote(prev)
-          })
+          // Revert optimistic update on error by restoring the previous state
+          setLocalReplies(currentReplies)
         } finally {
           setIsVoting(false)
         }
       }, 300)
     }, 1000), // Throttle to one vote per second
-    [serviceId, isVoting, user],
+    [serviceId, isVoting, user, localReplies],
   )
 
   const handleAuthSuccess = async () => {
@@ -937,7 +938,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
     }
 
     return (
-      <div className="mt-3 ml-6 mb-4">
+      <div className="mt-4 ml-6 mb-5">
         <form onSubmit={handleInlineSubmit} className="flex items-start gap-3" action="javascript:void(0);">
           <Avatar className="h-8 w-8 flex-shrink-0">
             <AvatarImage
@@ -948,37 +949,39 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
               {(user?.user_metadata?.full_name || user?.email || "U").substring(0, 2).toUpperCase()}
             </AvatarFallback>
           </Avatar>
-          <div className="flex-1 flex items-end gap-2">
-            <div className="flex-1 relative mt-2">
-              <div className="absolute -top-7 left-0 text-xs text-gray-500 flex items-center bg-gray-50 px-2 py-1 rounded-t-md shadow-sm">
-                <span>Replying to {parentName}</span>
-                <button
-                  type="button"
-                  className="ml-2 text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-300 rounded-full"
-                  onClick={() => setReplyingTo(null)}
-                  aria-label="Cancel reply"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-              <Textarea
-                ref={inlineInputRef}
-                placeholder={`Write a reply to ${parentName}...`}
-                className="min-h-[60px] py-2 px-3 resize-none border-gray-200 focus:border-gray-300 focus:ring-gray-200 rounded-md rounded-tl-none"
-                value={inlineReplyContent}
-                onChange={(e) => setInlineReplyContent(e.target.value)}
-              />
-            </div>
-            <motion.div whileTap={{ scale: 0.9 }}>
-              <Button
-                type="submit"
-                size="sm"
-                className="h-9 w-9 p-0 rounded-full transition-all duration-200"
-                disabled={isInlinePending || !inlineReplyContent.trim()}
+          <div className="flex-1 flex flex-col items-start gap-0">
+            <div className="inline-flex items-center text-xs text-gray-500 bg-gray-100 px-3 py-1.5 rounded-t-md mb-0 self-start">
+              <span>Replying to {parentName}</span>
+              <button
+                type="button"
+                className="ml-2 text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-gray-300 rounded-full"
+                onClick={() => setReplyingTo(null)}
+                aria-label="Cancel reply"
               >
-                {isInlinePending ? <span className="animate-spin">⏳</span> : <Send className="h-4 w-4" />}
-              </Button>
-            </motion.div>
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="flex items-end gap-2 w-full">
+              <div className="flex-1">
+                <Textarea
+                  ref={inlineInputRef}
+                  placeholder={`Write a reply to ${parentName}...`}
+                  className="min-h-[60px] py-2 px-3 resize-none border-gray-200 focus:border-gray-300 focus:ring-gray-200 rounded-md rounded-tl-none border-t-0"
+                  value={inlineReplyContent}
+                  onChange={(e) => setInlineReplyContent(e.target.value)}
+                />
+              </div>
+              <motion.div whileTap={{ scale: 0.9 }}>
+                <Button
+                  type="submit"
+                  size="sm"
+                  className="h-9 w-9 p-0 rounded-full transition-all duration-200"
+                  disabled={isInlinePending || !inlineReplyContent.trim()}
+                >
+                  {isInlinePending ? <span className="animate-spin">⏳</span> : <Send className="h-4 w-4" />}
+                </Button>
+              </motion.div>
+            </div>
           </div>
         </form>
       </div>
@@ -998,7 +1001,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
         initial={isNew ? { opacity: 0, y: -10, scale: 0.95 } : false}
         animate={isNew ? { opacity: 1, y: 0, scale: 1 } : {}}
         transition={{ type: "spring", stiffness: 500, damping: 30 }}
-        className={cn("flex flex-col", depth > 0 && "ml-6 mt-3")}
+        className={cn("flex flex-col", depth > 0 && "ml-6 mt-4")}
         whileHover={{ x: 2 }}
       >
         <div className="flex items-start gap-3">
@@ -1039,7 +1042,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
               </div>
               <p className="text-sm mt-1 break-words">{reply.content}</p>
             </motion.div>
-            <div className="flex items-center gap-3 mt-1 ml-1">
+            <div className="flex items-center gap-4 mt-2 ml-1">
               <button
                 className={cn(
                   "flex items-center gap-1 text-xs hover:text-gray-900 transition-colors",
@@ -1079,7 +1082,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
 
         {/* Nested replies */}
         {reply.replies && reply.replies.length > 0 && (
-          <div className="pl-4 border-l-2 border-gray-100 ml-4 mt-2">
+          <div className="pl-4 border-l-2 border-gray-100 ml-4 mt-3">
             {reply.replies.map((childReply) => (
               <ReplyThread key={`${childReply.id}-${childReply.created_at}`} reply={childReply} depth={depth + 1} />
             ))}
@@ -1144,10 +1147,10 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
               </button>
               <button
                 className="flex items-center gap-1 text-xs text-gray-500 transition-all duration-200 hover:text-gray-900 hover:scale-110"
-                onClick={toggleReplies}
+                onClick={() => initiateReply()}
               >
-                <ThumbsUp className="h-3.5 w-3.5" />
-                <span>{review.dislikes > 0 ? review.dislikes : "Dislike"}</span>
+                <MessageSquare className="h-3.5 w-3.5" />
+                <span>Reply</span>
               </button>
               <button
                 className="flex items-center gap-1 text-xs text-gray-500 transition-all duration-200 hover:text-gray-900 hover:scale-110"
@@ -1166,7 +1169,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
 
         {/* Threaded Replies */}
         {showReplies && (
-          <div className="px-4 pb-4 pt-2 border-t">
+          <div className="px-4 pb-5 pt-2 border-t">
             <AnimatePresence>
               {errorMessage && (
                 <motion.div
@@ -1195,7 +1198,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
             </AnimatePresence>
 
             {localReplies.length > 0 && (
-              <div className="space-y-4 mb-4">
+              <div className="space-y-5 mb-5">
                 {localReplies.map((reply) => (
                   <ReplyThread key={`${reply.id}-${reply.created_at}`} reply={reply} />
                 ))}
@@ -1206,7 +1209,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
             {user && !replyingTo && (
               <form
                 onSubmit={(e) => handleReplySubmit(e)}
-                className="flex items-start gap-3"
+                className="flex items-start gap-3 mt-4"
                 action="javascript:void(0);"
               >
                 <Avatar className="h-8 w-8 flex-shrink-0">
@@ -1223,7 +1226,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                     <Textarea
                       ref={replyInputRef}
                       placeholder={`Write a comment, ${user?.user_metadata?.full_name?.split(" ")[0] || "there"}...`}
-                      className="min-h-[60px] py-2 px-3 resize-none"
+                      className="min-h-[60px] py-2 px-3 resize-none border-gray-200 focus:border-gray-300 focus:ring-gray-200"
                       value={replyContent}
                       onChange={(e) => setReplyContent(e.target.value)}
                     />

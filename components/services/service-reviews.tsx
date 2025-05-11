@@ -21,6 +21,7 @@ import { ReviewItem } from "./review-item"
 import { supabase } from "@/lib/supabase"
 import type { Review, Reply } from "@/types/reviews"
 import { useSupabaseRealtime } from "@/hooks/use-supabase-realtime"
+import { ReviewSkeleton } from "./review-skeleton"
 
 // Add an isVisible prop to the component to track when it's actually visible
 // This will allow us to control when subscriptions are active
@@ -685,8 +686,10 @@ export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: num
         <h3 className="text-xl font-semibold">User Reviews</h3>
 
         {loading ? (
-          <div className="text-center py-8">
-            <p className="text-gray-500">Loading reviews...</p>
+          <div className="space-y-6">
+            <ReviewSkeleton replyCount={2} nestedReplies={true} />
+            <ReviewSkeleton replyCount={1} nestedReplies={false} />
+            <ReviewSkeleton replyCount={0} />
           </div>
         ) : filteredReviews.length === 0 ? (
           <div className="text-center py-8">
