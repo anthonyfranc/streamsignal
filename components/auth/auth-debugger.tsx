@@ -12,6 +12,7 @@ export function AuthDebugger() {
   const [sessionDetails, setSessionDetails] = useState<any>(null)
   const [cookieDetails, setCookieDetails] = useState<string[]>([])
   const [testResult, setTestResult] = useState<string | null>(null)
+  const [directVoteTest, setDirectVoteTest] = useState<string | null>(null)
 
   useEffect(() => {
     if (isOpen) {
@@ -53,12 +54,47 @@ export function AuthDebugger() {
       const result = await response.json()
 
       if (result.authenticated) {
-        setTestResult(`✅ Authentication successful! User ID: ${result.userId}`)
+        setTestResult(`✅ Authentication successful! User ID: ${result.userId}
+Debug info:
+- Session exists: ${result.debug.sessionExists}
+- Cookies count: ${result.debug.cookiesCount}
+- Cookie names: ${result.debug.cookieNames.join(", ")}`)
       } else {
-        setTestResult(`❌ Authentication failed: ${result.message}`)
+        setTestResult(`❌ Authentication failed: ${result.message}
+Debug info:
+- Session exists: ${result.debug?.sessionExists}
+- Cookies count: ${result.debug?.cookiesCount}
+- Cookie names: ${result.debug?.cookieNames?.join(", ")}`)
       }
     } catch (error) {
       setTestResult(`❌ Error testing authentication: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  const handleTestDirectVote = async () => {
+    try {
+      setDirectVoteTest("Testing direct vote submission...")
+
+      // First refresh the session
+      await refreshSession()
+
+      // Create a test form for a dummy vote
+      const formData = new FormData()
+      formData.append("reviewId", "1") // Use a dummy review ID
+      formData.append("voteType", "like")
+      formData.append("serviceId", "1")
+
+      // Import the submitVote function dynamically
+      const { submitVote } = await import("@/app/actions/vote-actions")
+
+      // Call the function directly
+      const result = await submitVote(formData)
+
+      setDirectVoteTest(`Vote test result: ${result.success ? "✅ Success" : "❌ Failed"}
+Message: ${result.message}
+Requires auth: ${result.requireAuth ? "Yes" : "No"}`)
+    } catch (error) {
+      setDirectVoteTest(`❌ Error testing direct vote: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -117,15 +153,22 @@ export function AuthDebugger() {
               </pre>
             </div>
 
-            <div>
+            <div className="space-y-2">
               <Button size="sm" onClick={handleTestAuth}>
-                Test Authentication
+                Test API Auth
               </Button>
               {testResult && <pre className="bg-gray-100 p-2 rounded overflow-auto mt-2">{testResult}</pre>}
             </div>
+
+            <div className="space-y-2">
+              <Button size="sm" onClick={handleTestDirectVote}>
+                Test Direct Vote
+              </Button>
+              {directVoteTest && <pre className="bg-gray-100 p-2 rounded overflow-auto mt-2">{directVoteTest}</pre>}
+            </div>
           </div>
         </CardContent>
-        <CardFooter>
+        <CardFooter className="flex justify-between">
           <Button variant="outline" size="sm" onClick={() => setIsOpen(false)}>
             Close
           </Button>
