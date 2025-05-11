@@ -1,45 +1,19 @@
 import type { GetServerSidePropsContext } from "next"
-import { getPagesUser } from "./pages-auth"
+import { getPagesServerUser } from "@/lib/pages-server-auth"
 
-/**
- * Helper function to get the authenticated user in getServerSideProps
- */
-export async function withAuth(context: GetServerSidePropsContext) {
-  const { user } = await getPagesUser(context)
+export async function withAuth(context: GetServerSidePropsContext, callback: (userId: string | null) => Promise<any>) {
+  try {
+    const { req, res } = context
+    const { user } = await getPagesServerUser({ req, res })
 
-  if (!user) {
+    return callback(user?.id || null)
+  } catch (error) {
+    console.error("Error in withAuth:", error)
     return {
-      redirect: {
-        destination: "/login",
-        permanent: false,
+      props: {
+        error: "Authentication error",
+        user: null,
       },
     }
-  }
-
-  return {
-    props: {
-      user: {
-        id: user.id,
-        email: user.email,
-      },
-    },
-  }
-}
-
-/**
- * Helper function to get the user in getServerSideProps without redirecting
- */
-export async function withUser(context: GetServerSidePropsContext) {
-  const { user } = await getPagesUser(context)
-
-  return {
-    props: {
-      user: user
-        ? {
-            id: user.id,
-            email: user.email,
-          }
-        : null,
-    },
   }
 }
