@@ -1,23 +1,20 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { createServerSupabaseClient, verifyServerAuth } from "@/lib/supabase-ssr"
+import { createServerClient } from "@/lib/supabase-server"
+import { cookies } from "next/headers"
+import { verifyServerAuth } from "@/lib/server-auth"
 
 // Add a delay function for rate limiting
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export async function submitVote(
   formData: FormData,
-): Promise<{ success: boolean; message: string; requireAuth?: boolean; debug?: any }> {
+): Promise<{ success: boolean; message: string; requireAuth?: boolean }> {
   try {
     // Get the user ID directly from the server auth verification
+    // This now uses getUser() internally which is reliable according to Supabase docs
     const userId = await verifyServerAuth()
-
-    // Add detailed debug information
-    const debug = {
-      authCheck: userId ? "success" : "failed",
-      timestamp: new Date().toISOString(),
-    }
 
     // Log authentication status for debugging
     console.log(
@@ -29,12 +26,12 @@ export async function submitVote(
         success: false,
         message: "You must be logged in to vote",
         requireAuth: true,
-        debug,
       }
     }
 
     // Create a Supabase client with the cookies
-    const supabase = createServerSupabaseClient()
+    const cookieStore = cookies()
+    const supabase = createServerClient(cookieStore)
 
     // Extract and validate data
     const reviewId = formData.get("reviewId") ? Number.parseInt(formData.get("reviewId") as string) : null
@@ -44,11 +41,11 @@ export async function submitVote(
 
     // Basic validation
     if (!reviewId && !replyId) {
-      return { success: false, message: "Either reviewId or replyId must be provided", debug }
+      return { success: false, message: "Either reviewId or replyId must be provided" }
     }
 
     if (voteType !== "like" && voteType !== "dislike") {
-      return { success: false, message: "Invalid vote type", debug }
+      return { success: false, message: "Invalid vote type" }
     }
 
     // Check if the user has already voted on this review/reply
@@ -66,10 +63,6 @@ export async function submitVote(
 
       existingVote = response.data
       existingVoteError = response.error
-
-      // Add to debug info
-      debug.existingVoteCheck = existingVote ? "found" : "not found"
-      if (existingVoteError) debug.existingVoteError = existingVoteError.message
     } catch (error) {
       // If we hit a rate limit, wait and try again
       if (error instanceof Error && error.message.includes("Too Many Requests")) {
@@ -86,9 +79,7 @@ export async function submitVote(
 
         existingVote = response.data
         existingVoteError = response.error
-        debug.retryRequired = true
       } else {
-        debug.error = error instanceof Error ? error.message : "Unknown error"
         throw error
       }
     }
@@ -100,8 +91,7 @@ export async function submitVote(
 
         if (deleteError) {
           console.error("Error removing vote:", deleteError)
-          debug.deleteError = deleteError.message
-          return { success: false, message: "Failed to remove vote. Please try again.", debug }
+          return { success: false, message: "Failed to remove vote. Please try again." }
         }
       } catch (error) {
         // If we hit a rate limit, wait and try again
@@ -113,11 +103,9 @@ export async function submitVote(
 
           if (deleteError) {
             console.error("Error removing vote after retry:", deleteError)
-            debug.deleteRetryError = deleteError.message
-            return { success: false, message: "Failed to remove vote. Please try again.", debug }
+            return { success: false, message: "Failed to remove vote. Please try again." }
           }
         } else {
-          debug.error = error instanceof Error ? error.message : "Unknown error"
           throw error
         }
       }
@@ -129,7 +117,7 @@ export async function submitVote(
         await updateReplyVoteCount(supabase, replyId)
       }
 
-      return { success: true, message: "Vote removed successfully", debug }
+      return { success: true, message: "Vote removed successfully" }
     }
 
     // If there's an existing vote of a different type, update it
@@ -142,8 +130,7 @@ export async function submitVote(
 
         if (updateError) {
           console.error("Error updating vote:", updateError)
-          debug.updateError = updateError.message
-          return { success: false, message: "Failed to update vote. Please try again.", debug }
+          return { success: false, message: "Failed to update vote. Please try again." }
         }
       } catch (error) {
         // If we hit a rate limit, wait and try again
@@ -158,11 +145,9 @@ export async function submitVote(
 
           if (updateError) {
             console.error("Error updating vote after retry:", updateError)
-            debug.updateRetryError = updateError.message
-            return { success: false, message: "Failed to update vote. Please try again.", debug }
+            return { success: false, message: "Failed to update vote. Please try again." }
           }
         } else {
-          debug.error = error instanceof Error ? error.message : "Unknown error"
           throw error
         }
       }
@@ -178,8 +163,7 @@ export async function submitVote(
 
         if (insertError) {
           console.error("Error submitting vote:", insertError)
-          debug.insertError = insertError.message
-          return { success: false, message: "Failed to submit vote. Please try again.", debug }
+          return { success: false, message: "Failed to submit vote. Please try again." }
         }
       } catch (error) {
         // If we hit a rate limit, wait and try again
@@ -196,11 +180,9 @@ export async function submitVote(
 
           if (insertError) {
             console.error("Error submitting vote after retry:", insertError)
-            debug.insertRetryError = insertError.message
-            return { success: false, message: "Failed to submit vote. Please try again.", debug }
+            return { success: false, message: "Failed to submit vote. Please try again." }
           }
         } else {
-          debug.error = error instanceof Error ? error.message : "Unknown error"
           throw error
         }
       }
@@ -218,14 +200,10 @@ export async function submitVote(
       revalidatePath(`/services/${serviceId}`)
     }
 
-    return { success: true, message: "Vote submitted successfully", debug }
+    return { success: true, message: "Vote submitted successfully" }
   } catch (error) {
     console.error("Error in submitVote:", error)
-    const debug = {
-      error: error instanceof Error ? error.message : "Unknown error",
-      stack: error instanceof Error ? error.stack : undefined,
-    }
-    return { success: false, message: "An unexpected error occurred. Please try again.", debug }
+    return { success: false, message: "An unexpected error occurred. Please try again." }
   }
 }
 
