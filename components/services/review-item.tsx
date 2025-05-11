@@ -632,10 +632,12 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
   // Update the handleVote function to use throttling instead of debouncing
   const handleVote = useCallback(
     throttle((voteType: "like" | "dislike") => {
-      if (!user || isVoting) {
-        if (!user) setAuthModalOpen(true)
+      if (!user) {
+        setAuthModalOpen(true)
         return
       }
+
+      if (isVoting) return
 
       setIsVoting(true)
 
@@ -684,13 +686,15 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
     [review.id, serviceId, isVoting, user, localReplies],
   )
 
-  // Similarly update the handleReplyVote function to use throttling
+  // Similarly update the handleReplyVote function
   const handleReplyVote = useCallback(
     throttle((replyId: number, voteType: "like" | "dislike") => {
-      if (!user || isVoting) {
-        if (!user) setAuthModalOpen(true)
+      if (!user) {
+        setAuthModalOpen(true)
         return
       }
+
+      if (isVoting) return
 
       setIsVoting(true)
 
@@ -1050,6 +1054,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                 )}
                 onClick={() => handleReplyVote(reply.id, "like")}
                 disabled={isVoting}
+                aria-label={user ? "Like this reply" : "Sign in to like this reply"}
               >
                 <ThumbsUp className="h-3 w-3" />
                 <span>{reply.likes > 0 ? reply.likes : "Like"}</span>
@@ -1061,6 +1066,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                 )}
                 onClick={() => handleReplyVote(reply.id, "dislike")}
                 disabled={isVoting}
+                aria-label={user ? "Dislike this reply" : "Sign in to dislike this reply"}
               >
                 <ThumbsDown className="h-3 w-3" />
                 <span>{reply.dislikes > 0 ? reply.dislikes : "Dislike"}</span>
@@ -1069,8 +1075,10 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                 <button
                   className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-900 transition-colors"
                   onClick={() => initiateReply(reply.id, reply.author_name)}
+                  aria-label={user ? "Reply" : "Sign in to reply"}
                 >
-                  Reply
+                  <MessageSquare className="h-3 w-3" />
+                  <span>Reply</span>
                 </button>
               )}
             </div>
@@ -1130,6 +1138,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                 )}
                 onClick={() => handleVote("like")}
                 disabled={isVoting}
+                aria-label={user ? "Like this review" : "Sign in to like this review"}
               >
                 <ThumbsUp className="h-3.5 w-3.5" />
                 <span>{review.likes > 0 ? review.likes : "Like"}</span>
@@ -1141,6 +1150,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                 )}
                 onClick={() => handleVote("dislike")}
                 disabled={isVoting}
+                aria-label={user ? "Dislike this review" : "Sign in to dislike this review"}
               >
                 <ThumbsDown className="h-3.5 w-3.5" />
                 <span>{review.dislikes > 0 ? review.dislikes : "Dislike"}</span>
@@ -1148,6 +1158,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
               <button
                 className="flex items-center gap-1 text-xs text-gray-500 transition-all duration-200 hover:text-gray-900 hover:scale-110"
                 onClick={() => initiateReply()}
+                aria-label={user ? "Reply to this review" : "Sign in to reply to this review"}
               >
                 <MessageSquare className="h-3.5 w-3.5" />
                 <span>Reply</span>
@@ -1160,7 +1171,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                 <span>
                   {localReplies.length > 0
                     ? `${localReplies.length} ${localReplies.length === 1 ? "reply" : "replies"}`
-                    : "Reply"}
+                    : "Show replies"}
                 </span>
               </button>
             </div>
