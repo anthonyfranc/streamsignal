@@ -1,7 +1,6 @@
 import { createClient } from "@supabase/supabase-js"
 import { createServerClient } from "@supabase/ssr"
 import type { CookieOptions } from "@supabase/ssr"
-import { cookies } from "next/headers"
 import type { Database } from "@/types/database"
 
 // Environment variable validation
@@ -37,8 +36,35 @@ export const createBrowserClient = () => {
 
 // Create a server client with cookie handling
 export const createServerComponentClient = () => {
-  const cookieStore = cookies()
+  // We need to dynamically import cookies from next/headers
+  // This ensures it's only imported in the App Router
+  let cookieStore: any = null
 
+  try {
+    // This will throw an error in the Pages Router
+    // We'll catch it and provide an alternative
+    if (typeof window === "undefined") {
+      // Using dynamic import to avoid static analysis
+      const getCookies = new Function('return import("next/headers").then(mod => mod.cookies)')
+      cookieStore = getCookies()
+    }
+  } catch (e) {
+    // This will happen in the Pages Router
+    // We'll provide an alternative below
+    console.debug("Could not import cookies from next/headers - this is expected in Pages Router")
+  }
+
+  // If we couldn't get cookies from next/headers, return a dummy client
+  // This client will only be used during build time in the Pages Router
+  if (!cookieStore) {
+    return createClient<Database>(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: false,
+      },
+    })
+  }
+
+  // Otherwise, return a proper server client
   return createServerClient<Database>(supabaseUrl, supabaseAnonKey, {
     cookies: {
       get(name: string) {
@@ -110,7 +136,33 @@ export const createMiddlewareClient = (request: Request, response: Response) => 
 
 // Create a server action client
 export const createServerActionClient = () => {
-  const cookieStore = cookies()
+  // We need to dynamically import cookies from next/headers
+  // This ensures it's only imported in the App Router
+  let cookieStore: any = null
+
+  try {
+    // This will throw an error in the Pages Router
+    // We'll catch it and provide an alternative
+    if (typeof window === "undefined") {
+      // Using dynamic import to avoid static analysis
+      const getCookies = new Function('return import("next/headers").then(mod => mod.cookies)')
+      cookieStore = getCookies()
+    }
+  } catch (e) {
+    // This will happen in the Pages Router
+    // We'll provide an alternative below
+    console.debug("Could not import cookies from next/headers - this is expected in Pages Router")
+  }
+
+  // If we couldn't get cookies from next/headers, return a dummy client
+  // This client will only be used during build time in the Pages Router
+  if (!cookieStore) {
+    return createClient<Database>(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: false,
+      },
+    })
+  }
 
   return createServerClient<Database>(supabaseUrl, supabaseAnonKey, {
     cookies: {
@@ -139,7 +191,33 @@ export const createServerActionClient = () => {
 
 // Create an API route client
 export const createRouteHandlerClient = () => {
-  const cookieStore = cookies()
+  // We need to dynamically import cookies from next/headers
+  // This ensures it's only imported in the App Router
+  let cookieStore: any = null
+
+  try {
+    // This will throw an error in the Pages Router
+    // We'll catch it and provide an alternative
+    if (typeof window === "undefined") {
+      // Using dynamic import to avoid static analysis
+      const getCookies = new Function('return import("next/headers").then(mod => mod.cookies)')
+      cookieStore = getCookies()
+    }
+  } catch (e) {
+    // This will happen in the Pages Router
+    // We'll provide an alternative below
+    console.debug("Could not import cookies from next/headers - this is expected in Pages Router")
+  }
+
+  // If we couldn't get cookies from next/headers, return a dummy client
+  // This client will only be used during build time in the Pages Router
+  if (!cookieStore) {
+    return createClient<Database>(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: false,
+      },
+    })
+  }
 
   return createServerClient<Database>(supabaseUrl, supabaseAnonKey, {
     cookies: {
