@@ -10,6 +10,8 @@ import { getFeaturedServices } from "@/app/actions/service-actions"
 import { getFeaturedChannels } from "@/app/actions/channel-actions"
 import { ThemeProvider } from "@/components/theme-provider"
 import { AuthProvider } from "@/contexts/auth-context"
+import { SessionMonitor } from "@/components/auth/session-monitor"
+import { SessionExpiryWarning } from "@/components/auth/session-expiry-warning"
 
 export function ClientLayout({ children }: { children: React.ReactNode }) {
   const isAdminRoute = useIsAdminRoute()
@@ -44,7 +46,10 @@ export function ClientLayout({ children }: { children: React.ReactNode }) {
   if (isAdminRoute && !isLoginPage) {
     return (
       <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          <SessionMonitor />
+          {children}
+        </AuthProvider>
       </ThemeProvider>
     )
   }
@@ -54,6 +59,7 @@ export function ClientLayout({ children }: { children: React.ReactNode }) {
     return (
       <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
         <AuthProvider>
+          <SessionMonitor />
           <div className="relative flex min-h-screen flex-col">{children}</div>
         </AuthProvider>
       </ThemeProvider>
@@ -64,11 +70,13 @@ export function ClientLayout({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
       <AuthProvider>
+        <SessionMonitor />
         <div className="relative flex min-h-screen flex-col">
           <SiteHeader featuredServices={featuredServices} featuredChannels={featuredChannels} />
           <main className="flex-1">{children}</main>
           <SiteFooter />
         </div>
+        <SessionExpiryWarning />
       </AuthProvider>
     </ThemeProvider>
   )
