@@ -1,59 +1,77 @@
 import { createServerClient } from "@supabase/ssr"
-import { cookies } from "next/headers"
 import type { Database } from "@/types/database"
 
-/**
- * Gets the current authenticated user from the server
- * This is the ONLY reliable way to get the user on the server
- */
-export async function getServerUser() {
+// Universal function that works in both App Router and Pages Router
+export async function getServerUser(context?: any) {
   try {
-    // Get the cookie store
-    const cookieStore = cookies()
+    let supabase
 
-    // Debug: Log all available cookies (names only for security)
-    const allCookies = cookieStore.getAll().map((c) => c.name)
-    console.log("Available cookies in getServerUser:", allCookies)
-
-    // Check specifically for Supabase auth cookie
-    const authCookie = cookieStore.get("sb-" + process.env.NEXT_PUBLIC_SUPABASE_PROJECT_REF + "-auth-token")
-    console.log("Auth cookie present:", !!authCookie)
-
-    // Create a properly configured Supabase client
-    const supabase = createServerClient<Database>(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          get(name: string) {
-            const cookie = cookieStore.get(name)
-            console.log(`Cookie requested: ${name}, found: ${!!cookie}`)
-            return cookie?.value
-          },
-          set(name: string, value: string, options: any) {
-            try {
-              cookieStore.set({ name, value, ...options })
-              console.log(`Cookie set: ${name}`)
-            } catch (error) {
-              // Expected error in Server Components
-              console.log(`Cannot set cookie in Server Component: ${name}`)
-            }
-          },
-          remove(name: string, options: any) {
-            try {
-              cookieStore.delete({ name, ...options })
-              console.log(`Cookie removed: ${name}`)
-            } catch (error) {
-              // Expected error in Server Components
-              console.log(`Cannot delete cookie in Server Component: ${name}`)
-            }
+    // Check if we're in API Routes or getServerSideProps (Pages Router)
+    if (context && context.req && context.res) {
+      // We're in Pages Router
+      supabase = createServerClient<Database>(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        {
+          cookies: {
+            get(name: string) {
+              return context.req.cookies[name]
+            },
+            set(name: string, value: string, options: any) {
+              context.res.setHeader(
+                "Set-Cookie",
+                `${name}=${value}; Path=${options.path || "/"}; ${
+                  options.httpOnly ? "HttpOnly;" : ""
+                } ${options.secure ? "Secure;" : ""} ${options.sameSite ? `SameSite=${options.sameSite};` : ""}`,
+              )
+            },
+            remove(name: string, options: any) {
+              context.res.setHeader(
+                "Set-Cookie",
+                `${name}=; Path=${options.path || "/"}; Expires=Thu, 01 Jan 1970 00:00:00 GMT`,
+              )
+            },
           },
         },
-      },
-    )
+      )
+    } else {
+      // We're in App Router or Client Component
+      const cookieGetter = () => {
+        try {
+          // This will work in Server Components when the request is available
+          // but will throw an error in Client Components
+          const requestCookies = require("@/lib/request-cookies").getCookies()
+          return requestCookies
+        } catch (e) {
+          // We're likely in a Client Component or other context without request access
+          return {}
+        }
+      }
+
+      const cookies = cookieGetter()
+
+      supabase = createServerClient<Database>(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        {
+          cookies: {
+            get(name: string) {
+              return cookies[name]
+            },
+            set(name: string, value: string, options: any) {
+              // In App Router, we can't set cookies from most Server Components
+              console.log(`Cookie set attempted: ${name}`)
+            },
+            remove(name: string, options: any) {
+              // In App Router, we can't remove cookies from most Server Components
+              console.log(`Cookie remove attempted: ${name}`)
+            },
+          },
+        },
+      )
+    }
 
     // Use getUser() to validate the token
-    console.log("Calling supabase.auth.getUser()...")
     const { data, error } = await supabase.auth.getUser()
 
     if (error) {
@@ -61,7 +79,6 @@ export async function getServerUser() {
       return { user: null, error }
     }
 
-    console.log("User retrieved successfully:", !!data.user)
     return { user: data.user, error: null }
   } catch (err) {
     console.error("Exception in getServerUser:", err)
@@ -73,20 +90,12 @@ export async function getServerUser() {
  * Verifies if a user is authenticated on the server
  * Returns the user ID if authenticated, null otherwise
  */
-export async function verifyServerAuth() {
-  console.log("Starting verifyServerAuth...")
-  const { user, error } = await getServerUser()
+export async function verifyServerAuth(context?: any) {
+  const { user, error } = await getServerUser(context)
 
-  if (error) {
-    console.error("Auth verification error:", error)
+  if (error || !user) {
     return null
   }
 
-  if (!user) {
-    console.log("No authenticated user found")
-    return null
-  }
-
-  console.log("User authenticated:", user.id.substring(0, 8) + "...")
   return user.id
 }

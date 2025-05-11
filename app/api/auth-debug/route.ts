@@ -1,26 +1,21 @@
 import { NextResponse } from "next/server"
-import { cookies } from "next/headers"
 import { createServerClient } from "@supabase/ssr"
+import { getCookies } from "@/lib/request-cookies"
 import { getServerUser } from "@/lib/server-auth"
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     console.log("Auth debug endpoint called")
 
-    // Get all cookies for debugging
-    const cookieStore = cookies()
-    const allCookies = cookieStore.getAll().map((c) => ({
-      name: c.name,
-      // Only show first few chars of value for security
-      value: c.value.substring(0, 5) + "...",
-      path: c.path,
-      expires: c.expires,
+    // Get cookies from our custom store
+    const cookies = getCookies()
+    const allCookies = Object.entries(cookies).map(([name, value]) => ({
+      name,
+      value: value.substring(0, 5) + "...",
     }))
 
     // Check for Supabase auth cookie specifically
-    const authCookieName = allCookies
-      .map((c) => c.name)
-      .find((name) => name.includes("sb-") && name.includes("-auth-token"))
+    const authCookieName = Object.keys(cookies).find((name) => name.includes("sb-") && name.includes("-auth-token"))
 
     console.log("Auth cookie found:", authCookieName)
 
@@ -37,18 +32,17 @@ export async function GET() {
       {
         cookies: {
           get(name: string) {
-            const cookie = cookieStore.get(name)
+            const cookie = cookies[name]
             console.log(`Direct cookie get: ${name}, found: ${!!cookie}`)
-            return cookie?.value
+            return cookie
           },
           set(name: string, value: string, options: any) {
-            // API routes can set cookies
             console.log(`Direct cookie set: ${name}`)
-            cookieStore.set({ name, value, ...options })
+            // Can't set cookies in this context
           },
           remove(name: string, options: any) {
             console.log(`Direct cookie remove: ${name}`)
-            cookieStore.delete({ name, ...options })
+            // Can't remove cookies in this context
           },
         },
       },

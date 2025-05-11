@@ -1,24 +1,27 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { createServerClient } from "@supabase/ssr"
+import { parseCookies, setCookies } from "@/lib/request-cookies"
 
 export async function middleware(request: NextRequest) {
   // Create a response object
   const response = NextResponse.next()
+
+  // Parse and store cookies from the request
+  const cookieHeader = request.headers.get("cookie") || ""
+  const cookies = parseCookies(cookieHeader)
+  setCookies(cookies)
 
   // Skip auth handling for certain paths
   if (
     request.nextUrl.pathname.startsWith("/api/") ||
     request.nextUrl.pathname.includes(".") ||
     request.nextUrl.pathname.startsWith("/_next") ||
-    // Skip Pages Router completely
     request.nextUrl.pathname.startsWith("/pages/")
   ) {
     return response
   }
 
   try {
-    console.log("Middleware processing request:", request.nextUrl.pathname)
-
     // Create a Supabase client for the middleware
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -84,12 +87,5 @@ export async function middleware(request: NextRequest) {
 
 // Configure middleware to exclude Pages Router paths
 export const config = {
-  matcher: [
-    // Match all paths except for:
-    // - API routes
-    // - Static files
-    // - Next.js internals
-    // - Pages Router paths
-    "/((?!api|_next/static|_next/image|favicon.ico|pages/).*)",
-  ],
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
 }
