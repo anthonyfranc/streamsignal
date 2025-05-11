@@ -1,43 +1,10 @@
-import { createServerClient } from "@supabase/ssr"
-import { cookies } from "next/headers"
-import type { Database } from "@/types/database"
+import { createServerComponentClient } from "./supabase-client-factory"
+import { cache } from "react"
 
-/**
- * Gets the current authenticated user from the server
- * This is the ONLY reliable way to get the user on the server
- */
-export async function getServerUser() {
+// Use React cache to prevent multiple calls to getServerUser within the same render cycle
+export const getServerUser = cache(async () => {
   try {
-    const cookieStore = cookies()
-
-    // Create a properly configured Supabase client
-    const supabase = createServerClient<Database>(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          get(name: string) {
-            return cookieStore.get(name)?.value
-          },
-          set(name: string, value: string, options: any) {
-            try {
-              cookieStore.set({ name, value, ...options })
-            } catch (error) {
-              // Expected error in Server Components
-              console.debug("Cannot set cookie in Server Component - this is normal")
-            }
-          },
-          remove(name: string, options: any) {
-            try {
-              cookieStore.delete({ name, ...options })
-            } catch (error) {
-              // Expected error in Server Components
-              console.debug("Cannot delete cookie in Server Component - this is normal")
-            }
-          },
-        },
-      },
-    )
+    const supabase = createServerComponentClient()
 
     // Use getUser() to validate the token
     const { data, error } = await supabase.auth.getUser()
@@ -52,7 +19,7 @@ export async function getServerUser() {
     console.error("Exception in getServerUser:", err)
     return { user: null, error: err }
   }
-}
+})
 
 /**
  * Verifies if a user is authenticated on the server
@@ -61,9 +28,37 @@ export async function getServerUser() {
 export async function verifyServerAuth() {
   const { user, error } = await getServerUser()
 
-  if (error || !user) {
+  if (error) {
+    console.error("Auth verification error:", error)
+    return null
+  }
+
+  if (!user) {
+    console.log("No authenticated user found")
     return null
   }
 
   return user.id
+}
+
+/**
+ * Gets the user's profile data
+ * Returns the profile data if available, null otherwise
+ */
+export async function getUserProfile(userId: string) {
+  try {
+    const supabase = createServerComponentClient()
+
+    const { data, error } = await supabase.from("user_profiles").select("*").eq("id", userId).single()
+
+    if (error) {
+      console.error("Error getting user profile:", error.message)
+      return null
+    }
+
+    return data
+  } catch (err) {
+    console.error("Exception in getUserProfile:", err)
+    return null
+  }
 }

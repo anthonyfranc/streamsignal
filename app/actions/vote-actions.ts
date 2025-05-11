@@ -1,8 +1,7 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { createServerClient } from "@supabase/ssr"
-import { cookies } from "next/headers"
+import { createServerActionClient } from "@/lib/supabase-client-factory"
 import { verifyServerAuth } from "@/lib/server-auth"
 
 // Add a delay function for rate limiting
@@ -43,35 +42,8 @@ export async function submitVote(
       }
     }
 
-    // Create a Supabase client with the cookies
-    const cookieStore = cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          get(name: string) {
-            return cookieStore.get(name)?.value
-          },
-          set(name: string, value: string, options: any) {
-            try {
-              cookieStore.set({ name, value, ...options })
-            } catch (error) {
-              // Expected error in Server Components
-              console.debug("Cannot set cookie in Server Component - this is normal")
-            }
-          },
-          remove(name: string, options: any) {
-            try {
-              cookieStore.delete({ name, ...options })
-            } catch (error) {
-              // Expected error in Server Components
-              console.debug("Cannot delete cookie in Server Component - this is normal")
-            }
-          },
-        },
-      },
-    )
+    // Create a Supabase client for server actions
+    const supabase = createServerActionClient()
 
     // Extract and validate data
     const reviewId = formData.get("reviewId") ? Number.parseInt(formData.get("reviewId") as string) : null

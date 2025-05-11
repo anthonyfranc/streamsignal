@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import type { Session, User } from "@supabase/supabase-js"
 import { supabase } from "@/lib/supabase"
 import { useToast } from "@/hooks/use-toast"
+import { useRouter } from "next/navigation"
 
 type AuthContextType = {
   user: User | null
@@ -29,6 +30,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isSessionExpiring, setIsSessionExpiring] = useState(false)
   const [isRefreshingSession, setIsRefreshingSession] = useState(false)
   const { toast } = useToast()
+  const router = useRouter()
 
   // Function to refresh the session
   const refreshSession = async () => {
@@ -53,10 +55,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setSessionExpiry(data.session.expires_at * 1000)
         }
 
-        // Broadcast session refresh to other tabs
-        if (typeof window !== "undefined") {
-          localStorage.setItem("session_refreshed", Date.now().toString())
-        }
+        // Force a router refresh to update server components
+        router.refresh()
       } else {
         console.warn("No session returned from refresh")
       }
@@ -71,17 +71,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     // Get session from storage
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setUser(session?.user ?? null)
+    const initializeAuth = async () => {
+      try {
+        setIsLoading(true)
 
-      // Set session expiry if available
-      if (session?.expires_at) {
-        setSessionExpiry(session.expires_at * 1000)
+        // Get the current session
+        const {
+          data: { session },
+        } = await supabase.auth.getSession()
+
+        setSession(session)
+        setUser(session?.user ?? null)
+
+        // Set session expiry if available
+        if (session?.expires_at) {
+          setSessionExpiry(session.expires_at * 1000)
+        }
+
+        // If we have a session but it's close to expiry, refresh it
+        if (session && session.expires_at) {
+          const expiryTime = session.expires_at * 1000
+          const now = Date.now()
+          const timeUntilExpiry = expiryTime - now
+
+          // If less than 10 minutes until expiry, refresh
+          if (timeUntilExpiry < 10 * 60 * 1000) {
+            await refreshSession()
+          }
+        }
+      } catch (error) {
+        console.error("Error initializing auth:", error)
+      } finally {
+        setIsLoading(false)
       }
+    }
 
-      setIsLoading(false)
-    })
+    initializeAuth()
 
     // Listen for auth changes
     const {
@@ -98,11 +123,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSessionExpiry(null)
       }
 
-      setIsLoading(false)
+      // Force a router refresh to update server components
+      router.refresh()
     })
 
     return () => subscription.unsubscribe()
-  }, [])
+  }, [router])
 
   // Monitor session expiry
   useEffect(() => {
@@ -133,34 +159,63 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [sessionExpiry])
 
   const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    return { error }
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password })
+
+      if (!error) {
+        // Force a router refresh to update server components
+        router.refresh()
+      }
+
+      return { error }
+    } catch (error) {
+      console.error("Sign in error:", error)
+      return { error }
+    }
   }
 
   const signUp = async (email: string, password: string, metadata?: { [key: string]: any }) => {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: metadata,
-      },
-    })
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: metadata,
+        },
+      })
 
-    // We don't need to manually create a user profile anymore
-    // The database trigger will handle this automatically
+      if (!error) {
+        // Force a router refresh to update server components
+        router.refresh()
+      }
 
-    return { data, error }
+      return { data, error }
+    } catch (error) {
+      console.error("Sign up error:", error)
+      return { data: null, error }
+    }
   }
 
   const signOut = async () => {
-    await supabase.auth.signOut()
+    try {
+      await supabase.auth.signOut()
+      // Force a router refresh to update server components
+      router.refresh()
+    } catch (error) {
+      console.error("Sign out error:", error)
+    }
   }
 
   const resetPassword = async (email: string) => {
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/reset-password`,
-    })
-    return { error }
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/reset-password`,
+      })
+      return { error }
+    } catch (error) {
+      console.error("Reset password error:", error)
+      return { error }
+    }
   }
 
   const value = {

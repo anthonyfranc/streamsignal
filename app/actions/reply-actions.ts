@@ -1,11 +1,11 @@
 "use server"
-import { cookies } from "next/headers"
-import { createServerClient } from "@supabase/ssr"
+
 import { revalidatePath } from "next/cache"
+import { createServerActionClient } from "@/lib/supabase-client-factory"
 import { verifyServerAuth } from "@/lib/server-auth"
 import type { Reply } from "@/types/reviews"
 
-export async function submitReply(
+export async function submitReviewReply(
   formData: FormData,
 ): Promise<{ success: boolean; message: string; requireAuth?: boolean; replyId?: number }> {
   try {
@@ -29,80 +29,87 @@ export async function submitReply(
       console.log("No user ID returned from auth verification")
       return {
         success: false,
-        message: "You must be logged in to reply",
+        message: "You must be logged in to submit a reply",
         requireAuth: true,
       }
     }
 
-    // Create a Supabase client with the cookies
-    const cookieStore = cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          get(name: string) {
-            return cookieStore.get(name)?.value
-          },
-          set(name: string, value: string, options: any) {
-            try {
-              cookieStore.set({ name, value, ...options })
-            } catch (error) {
-              // Expected error in Server Components
-              console.debug("Cannot set cookie in Server Component - this is normal")
-            }
-          },
-          remove(name: string, options: any) {
-            try {
-              cookieStore.delete({ name, ...options })
-            } catch (error) {
-              // Expected error in Server Components
-              console.debug("Cannot delete cookie in Server Component - this is normal")
-            }
-          },
-        },
-      },
-    )
+    // Create a Supabase client for server actions
+    const supabase = createServerActionClient()
 
-    // Extract data from the form
+    // Get user's session to access metadata
+    const { data: userData } = await supabase.auth.getUser()
+    const user = userData?.user
+
+    // Extract and validate data
     const reviewId = Number.parseInt(formData.get("reviewId") as string)
     const content = formData.get("content") as string
     const serviceId = Number.parseInt(formData.get("serviceId") as string)
+    const parentId = formData.get("parentId") ? Number.parseInt(formData.get("parentId") as string) : null
 
-    // Validate the data
+    // Get user's name from their profile
+    let authorName = user?.user_metadata?.full_name || user?.user_metadata?.name || ""
+
+    // If no name is found in metadata, try to get it from user_profiles
+    if (!authorName) {
+      const { data: profileData } = await supabase.from("user_profiles").select("full_name").eq("id", userId).single()
+
+      if (profileData && profileData.full_name) {
+        authorName = profileData.full_name
+      } else {
+        // Fallback to email username if no name is found
+        authorName = user?.email?.split("@")[0] || "User"
+      }
+    }
+
+    // Basic validation
     if (!reviewId || isNaN(reviewId)) {
       return { success: false, message: "Invalid review ID" }
     }
 
-    if (!content || content.trim().length === 0) {
-      return { success: false, message: "Reply content cannot be empty" }
+    if (!content || content.trim().length < 1) {
+      return { success: false, message: "Please provide reply content" }
     }
 
-    // Insert the reply
-    const { data: reply, error } = await supabase
+    // If parentId is provided, verify it exists and belongs to the same review
+    if (parentId) {
+      const { data: parentReply, error: parentError } = await supabase
+        .from("review_replies")
+        .select("review_id")
+        .eq("id", parentId)
+        .single()
+
+      if (parentError || !parentReply) {
+        return { success: false, message: "Invalid parent reply" }
+      }
+
+      if (parentReply.review_id !== reviewId) {
+        return { success: false, message: "Parent reply does not belong to this review" }
+      }
+    }
+
+    // Insert reply into database
+    const { data: insertedReply, error } = await supabase
       .from("review_replies")
       .insert({
         review_id: reviewId,
+        parent_id: parentId,
         user_id: userId,
-        content: content.trim(),
-        created_at: new Date().toISOString(),
+        author_name: authorName,
+        content,
+        likes: 0,
+        dislikes: 0,
+        status: "approved", // Set to approved for immediate display
       })
-      .select("id")
+      .select()
       .single()
 
     if (error) {
       console.error("Error submitting reply:", error)
-      return { success: false, message: "Failed to submit reply. Please try again." }
-    }
-
-    // Update the reply count on the review
-    const { error: updateError } = await supabase.rpc("increment_reply_count", {
-      review_id_param: reviewId,
-    })
-
-    if (updateError) {
-      console.error("Error updating reply count:", updateError)
-      // Don't return an error here, as the reply was successfully created
+      return {
+        success: false,
+        message: "Failed to submit reply. Please try again.",
+      }
     }
 
     // Revalidate the service page
@@ -112,19 +119,21 @@ export async function submitReply(
 
     return {
       success: true,
-      message: "Reply submitted successfully",
-      replyId: reply?.id,
+      message: "Your reply has been submitted successfully!",
+      replyId: insertedReply.id,
     }
   } catch (error) {
-    console.error("Error in submitReply:", error)
-    return { success: false, message: "An unexpected error occurred. Please try again." }
+    console.error("Error in submitReviewReply:", error)
+    return {
+      success: false,
+      message: "An unexpected error occurred. Please try again.",
+    }
   }
 }
 
 export async function getReviewReplies(reviewId: number): Promise<Reply[]> {
   try {
-    const cookieStore = cookies()
-    const supabase = createServerClient(cookieStore)
+    const supabase = createServerActionClient()
 
     // Fetch all approved replies for this review
     const { data, error } = await supabase

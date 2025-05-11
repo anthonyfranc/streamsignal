@@ -1,18 +1,25 @@
 import { createClient } from "@supabase/supabase-js"
 import type { Database } from "@/types/database"
+import { createBrowserClient } from "./supabase-client-factory"
 
 // Get the Supabase URL and anon key from environment variables
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
-// Create a Supabase client that works in both client and server components
-export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-  },
-})
+// Create a singleton instance of the Supabase client for the browser
+let supabaseInstance: ReturnType<typeof createBrowserClient> | null = null
+
+export const supabase = (() => {
+  if (!supabaseInstance) {
+    supabaseInstance = createBrowserClient()
+  }
+  return supabaseInstance
+})()
+
+// Export a function to get a fresh client if needed
+export const getSupabaseClient = () => {
+  return createBrowserClient()
+}
 
 // Create a singleton instance for reuse
 let _supabaseServer: ReturnType<typeof getSupabase> | null = null

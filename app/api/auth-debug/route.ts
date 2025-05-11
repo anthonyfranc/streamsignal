@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { cookies } from "next/headers"
+import { createRouteHandlerClient } from "@/lib/supabase-client-factory"
 import { getServerUser } from "@/lib/server-auth"
-import { createServerClient } from "@supabase/ssr"
 
 export async function GET() {
   try {
@@ -19,53 +19,41 @@ export async function GET() {
     const { user, error } = await getServerUser()
 
     // Also check directly with Supabase for comparison
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          get(name: string) {
-            return cookieStore.get(name)?.value
-          },
-          set(name: string, value: string, options: any) {
-            try {
-              cookieStore.set({ name, value, ...options })
-            } catch (error) {
-              // Expected error in Server Components
-              console.debug("Cannot set cookie in API route - this is normal")
-            }
-          },
-          remove(name: string, options: any) {
-            try {
-              cookieStore.delete({ name, ...options })
-            } catch (error) {
-              // Expected error in Server Components
-              console.debug("Cannot delete cookie in API route - this is normal")
-            }
-          },
-        },
-      },
-    )
+    const supabase = createRouteHandlerClient()
 
-    const { data: userData } = await supabase.auth.getUser()
-    const { data: sessionData } = await supabase.auth.getSession()
+    // Get user data directly
+    const { data: userData, error: userError } = await supabase.auth.getUser()
+
+    // Get session data directly
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+
+    // Get auth cookie name
+    const authCookieName = Object.keys(cookieStore.getAll()).find(
+      (name) => name.includes("sb-") && name.includes("-auth"),
+    )
 
     return NextResponse.json({
       authenticated: !!user,
       userId: user?.id ? user.id.substring(0, 8) + "..." : null,
       error: error ? error.message : null,
       cookieCount: allCookies.length,
-      authCookiePresent: allCookies.some((c) => c.name.includes("-auth-")),
+      authCookiePresent: !!authCookieName,
+      authCookieName,
       cookies: allCookies,
       directCheck: {
         userPresent: !!userData.user,
         sessionPresent: !!sessionData.session,
+        userError: userError?.message,
+        sessionError: sessionError?.message,
       },
+      timestamp: new Date().toISOString(),
     })
   } catch (error) {
     return NextResponse.json(
       {
         error: error instanceof Error ? error.message : "Unknown error",
+        stack: error instanceof Error ? error.stack : undefined,
+        timestamp: new Date().toISOString(),
       },
       { status: 500 },
     )
