@@ -1,64 +1,29 @@
-import { createServerClient } from "@supabase/ssr"
+import { createServerClient } from "@/lib/supabase-server"
 import { cookies } from "next/headers"
-import type { Database } from "@/types/database"
 
-export async function getServerSupabase() {
-  const cookieStore = cookies()
-
-  const supabase = createServerClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    {
-      cookies: {
-        get: (name) => {
-          return cookieStore.get(name)?.value
-        },
-      },
-    },
-  )
-
-  return supabase
-}
-
-export async function getUser() {
-  const supabase = await getServerSupabase()
-
+/**
+ * Gets the current authenticated user from the server
+ * This is the ONLY reliable way to get the user on the server
+ * According to Supabase docs, getSession() is not reliable in Server Components
+ */
+export async function getServerUser() {
   try {
-    const {
-      data: { user },
-      error,
-    } = await supabase.auth.getUser()
+    const cookieStore = cookies()
+    const supabase = createServerClient(cookieStore)
 
-    if (error || !user) {
-      console.error("Auth error or no user:", error)
-      return null
+    // Use getUser() instead of getSession() as per Supabase documentation
+    // getUser() sends a request to the Supabase Auth server every time to revalidate the Auth token
+    const { data, error } = await supabase.auth.getUser()
+
+    if (error) {
+      console.error("Error getting server user:", error.message)
+      return { user: null, error }
     }
 
-    return user
-  } catch (error) {
-    console.error("Error getting user:", error)
-    return null
-  }
-}
-
-export async function getSession() {
-  const supabase = await getServerSupabase()
-
-  try {
-    const {
-      data: { session },
-      error,
-    } = await supabase.auth.getSession()
-
-    if (error || !session) {
-      console.error("Session error or no session:", error)
-      return null
-    }
-
-    return session
-  } catch (error) {
-    console.error("Error getting session:", error)
-    return null
+    return { user: data.user, error: null }
+  } catch (err) {
+    console.error("Exception in getServerUser:", err)
+    return { user: null, error: err }
   }
 }
 
@@ -67,6 +32,11 @@ export async function getSession() {
  * Returns the user ID if authenticated, null otherwise
  */
 export async function verifyServerAuth() {
-  const user = await getUser()
-  return user?.id || null
+  const { user, error } = await getServerUser()
+
+  if (error || !user) {
+    return null
+  }
+
+  return user.id
 }

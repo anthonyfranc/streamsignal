@@ -1,45 +1,140 @@
 "use server"
 
-import { getUser, getServerSupabase } from "@/lib/server-auth"
 import { revalidatePath } from "next/cache"
+import { createServerSupabaseClient, verifyServerAuth } from "@/lib/supabase-ssr"
 
-export async function submitVote(formData: FormData) {
+// Add a delay function for rate limiting
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+export async function submitVote(
+  formData: FormData,
+): Promise<{ success: boolean; message: string; requireAuth?: boolean; debug?: any }> {
   try {
-    const user = await getUser()
+    // Get the user ID directly from the server auth verification
+    const userId = await verifyServerAuth()
 
-    if (!user) {
-      return { success: false, error: "Authentication required" }
+    // Add detailed debug information
+    const debug = {
+      authCheck: userId ? "success" : "failed",
+      timestamp: new Date().toISOString(),
     }
 
-    const reviewId = formData.get("reviewId") as string
-    const voteType = formData.get("voteType") as string
-    const serviceId = formData.get("serviceId") as string
+    // Log authentication status for debugging
+    console.log(
+      `Server auth check result: ${userId ? "Authenticated as " + userId.substring(0, 8) + "..." : "Not authenticated"}`,
+    )
 
-    if (!reviewId || !voteType) {
-      return { success: false, error: "Missing required fields" }
+    if (!userId) {
+      return {
+        success: false,
+        message: "You must be logged in to vote",
+        requireAuth: true,
+        debug,
+      }
     }
 
-    const supabase = await getServerSupabase()
+    // Create a Supabase client with the cookies
+    const supabase = createServerSupabaseClient()
 
-    // Check if user already voted
-    const { data: existingVote } = await supabase
-      .from("review_votes")
-      .select("*")
-      .eq("review_id", reviewId)
-      .eq("user_id", user.id)
-      .single()
+    // Extract and validate data
+    const reviewId = formData.get("reviewId") ? Number.parseInt(formData.get("reviewId") as string) : null
+    const replyId = formData.get("replyId") ? Number.parseInt(formData.get("replyId") as string) : null
+    const voteType = formData.get("voteType") as "like" | "dislike"
+    const serviceId = Number.parseInt(formData.get("serviceId") as string)
 
-    if (existingVote) {
-      if (existingVote.vote_type === voteType) {
-        // Remove vote if clicking the same button
+    // Basic validation
+    if (!reviewId && !replyId) {
+      return { success: false, message: "Either reviewId or replyId must be provided", debug }
+    }
+
+    if (voteType !== "like" && voteType !== "dislike") {
+      return { success: false, message: "Invalid vote type", debug }
+    }
+
+    // Check if the user has already voted on this review/reply
+    let existingVote
+    let existingVoteError
+
+    try {
+      const response = await supabase
+        .from("review_votes")
+        .select("*")
+        .eq("user_id", userId)
+        .eq(reviewId ? "review_id" : "reply_id", reviewId || replyId)
+        .is(reviewId ? "reply_id" : "review_id", null)
+        .single()
+
+      existingVote = response.data
+      existingVoteError = response.error
+
+      // Add to debug info
+      debug.existingVoteCheck = existingVote ? "found" : "not found"
+      if (existingVoteError) debug.existingVoteError = existingVoteError.message
+    } catch (error) {
+      // If we hit a rate limit, wait and try again
+      if (error instanceof Error && error.message.includes("Too Many Requests")) {
+        console.log("Rate limited, waiting before retry...")
+        await delay(1000) // Wait 1 second before retrying
+
+        const response = await supabase
+          .from("review_votes")
+          .select("*")
+          .eq("user_id", userId)
+          .eq(reviewId ? "review_id" : "reply_id", reviewId || replyId)
+          .is(reviewId ? "reply_id" : "review_id", null)
+          .single()
+
+        existingVote = response.data
+        existingVoteError = response.error
+        debug.retryRequired = true
+      } else {
+        debug.error = error instanceof Error ? error.message : "Unknown error"
+        throw error
+      }
+    }
+
+    // If there's an existing vote of the same type, remove it (toggle behavior)
+    if (existingVote && existingVote.vote_type === voteType) {
+      try {
         const { error: deleteError } = await supabase.from("review_votes").delete().eq("id", existingVote.id)
 
         if (deleteError) {
-          console.error("Error deleting vote:", deleteError)
-          return { success: false, error: "Failed to remove vote" }
+          console.error("Error removing vote:", deleteError)
+          debug.deleteError = deleteError.message
+          return { success: false, message: "Failed to remove vote. Please try again.", debug }
         }
-      } else {
-        // Update vote if changing vote type
+      } catch (error) {
+        // If we hit a rate limit, wait and try again
+        if (error instanceof Error && error.message.includes("Too Many Requests")) {
+          console.log("Rate limited on delete, waiting before retry...")
+          await delay(1000) // Wait 1 second before retrying
+
+          const { error: deleteError } = await supabase.from("review_votes").delete().eq("id", existingVote.id)
+
+          if (deleteError) {
+            console.error("Error removing vote after retry:", deleteError)
+            debug.deleteRetryError = deleteError.message
+            return { success: false, message: "Failed to remove vote. Please try again.", debug }
+          }
+        } else {
+          debug.error = error instanceof Error ? error.message : "Unknown error"
+          throw error
+        }
+      }
+
+      // Update the vote count in the review/reply
+      if (reviewId) {
+        await updateReviewVoteCount(supabase, reviewId)
+      } else if (replyId) {
+        await updateReplyVoteCount(supabase, replyId)
+      }
+
+      return { success: true, message: "Vote removed successfully", debug }
+    }
+
+    // If there's an existing vote of a different type, update it
+    if (existingVote) {
+      try {
         const { error: updateError } = await supabase
           .from("review_votes")
           .update({ vote_type: voteType })
@@ -47,63 +142,231 @@ export async function submitVote(formData: FormData) {
 
         if (updateError) {
           console.error("Error updating vote:", updateError)
-          return { success: false, error: "Failed to update vote" }
+          debug.updateError = updateError.message
+          return { success: false, message: "Failed to update vote. Please try again.", debug }
+        }
+      } catch (error) {
+        // If we hit a rate limit, wait and try again
+        if (error instanceof Error && error.message.includes("Too Many Requests")) {
+          console.log("Rate limited on update, waiting before retry...")
+          await delay(1000) // Wait 1 second before retrying
+
+          const { error: updateError } = await supabase
+            .from("review_votes")
+            .update({ vote_type: voteType })
+            .eq("id", existingVote.id)
+
+          if (updateError) {
+            console.error("Error updating vote after retry:", updateError)
+            debug.updateRetryError = updateError.message
+            return { success: false, message: "Failed to update vote. Please try again.", debug }
+          }
+        } else {
+          debug.error = error instanceof Error ? error.message : "Unknown error"
+          throw error
         }
       }
     } else {
-      // Insert new vote
-      const { error: insertError } = await supabase.from("review_votes").insert({
-        review_id: reviewId,
-        user_id: user.id,
-        vote_type: voteType,
-      })
+      // Otherwise, insert a new vote
+      try {
+        const { error: insertError } = await supabase.from("review_votes").insert({
+          review_id: reviewId,
+          reply_id: replyId,
+          user_id: userId,
+          vote_type: voteType,
+        })
 
-      if (insertError) {
-        console.error("Error inserting vote:", insertError)
-        return { success: false, error: "Failed to submit vote" }
+        if (insertError) {
+          console.error("Error submitting vote:", insertError)
+          debug.insertError = insertError.message
+          return { success: false, message: "Failed to submit vote. Please try again.", debug }
+        }
+      } catch (error) {
+        // If we hit a rate limit, wait and try again
+        if (error instanceof Error && error.message.includes("Too Many Requests")) {
+          console.log("Rate limited on insert, waiting before retry...")
+          await delay(1000) // Wait 1 second before retrying
+
+          const { error: insertError } = await supabase.from("review_votes").insert({
+            review_id: reviewId,
+            reply_id: replyId,
+            user_id: userId,
+            vote_type: voteType,
+          })
+
+          if (insertError) {
+            console.error("Error submitting vote after retry:", insertError)
+            debug.insertRetryError = insertError.message
+            return { success: false, message: "Failed to submit vote. Please try again.", debug }
+          }
+        } else {
+          debug.error = error instanceof Error ? error.message : "Unknown error"
+          throw error
+        }
       }
     }
 
-    // Update vote counts
-    const { data: upvotes } = await supabase
-      .from("review_votes")
-      .select("*", { count: "exact" })
-      .eq("review_id", reviewId)
-      .eq("vote_type", "upvote")
-
-    const { data: downvotes } = await supabase
-      .from("review_votes")
-      .select("*", { count: "exact" })
-      .eq("review_id", reviewId)
-      .eq("vote_type", "downvote")
-
-    const { error: updateReviewError } = await supabase
-      .from("service_reviews")
-      .update({
-        upvotes: upvotes?.length || 0,
-        downvotes: downvotes?.length || 0,
-      })
-      .eq("id", reviewId)
-
-    if (updateReviewError) {
-      console.error("Error updating review vote counts:", updateReviewError)
+    // Update the vote count in the review/reply
+    if (reviewId) {
+      await updateReviewVoteCount(supabase, reviewId)
+    } else if (replyId) {
+      await updateReplyVoteCount(supabase, replyId)
     }
 
-    if (serviceId) {
+    // Revalidate the service page
+    if (serviceId && !isNaN(serviceId)) {
       revalidatePath(`/services/${serviceId}`)
     }
 
-    return {
-      success: true,
-      voteType: existingVote?.vote_type === voteType ? null : voteType,
-      upvotes: upvotes?.length || 0,
-      downvotes: downvotes?.length || 0,
+    return { success: true, message: "Vote submitted successfully", debug }
+  } catch (error) {
+    console.error("Error in submitVote:", error)
+    const debug = {
+      error: error instanceof Error ? error.message : "Unknown error",
+      stack: error instanceof Error ? error.stack : undefined,
+    }
+    return { success: false, message: "An unexpected error occurred. Please try again.", debug }
+  }
+}
+
+// Helper function to update the vote count in a review
+async function updateReviewVoteCount(supabase: any, reviewId: number) {
+  try {
+    // Count likes
+    const { data: likesData, error: likesError } = await supabase
+      .from("review_votes")
+      .select("count", { count: "exact" })
+      .eq("review_id", reviewId)
+      .eq("vote_type", "like")
+
+    // Count dislikes
+    const { data: dislikesData, error: dislikesError } = await supabase
+      .from("review_votes")
+      .select("count", { count: "exact" })
+      .eq("review_id", reviewId)
+      .eq("vote_type", "dislike")
+
+    // Update the review with the new counts
+    const { error: updateError } = await supabase
+      .from("service_reviews")
+      .update({
+        likes: likesData?.count || 0,
+        dislikes: dislikesData?.count || 0,
+      })
+      .eq("id", reviewId)
+
+    if (updateError) {
+      console.error("Error updating review vote count:", updateError)
     }
   } catch (error) {
-    console.error("Vote submission error:", error)
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "An unexpected error occurred",
+    // If we hit a rate limit, wait and try again
+    if (error instanceof Error && error.message.includes("Too Many Requests")) {
+      console.log("Rate limited on vote count update, waiting before retry...")
+      await delay(1000) // Wait 1 second before retrying
+
+      try {
+        // Count likes
+        const { data: likesData } = await supabase
+          .from("review_votes")
+          .select("count", { count: "exact" })
+          .eq("review_id", reviewId)
+          .eq("vote_type", "like")
+
+        // Count dislikes
+        const { data: dislikesData } = await supabase
+          .from("review_votes")
+          .select("count", { count: "exact" })
+          .eq("review_id", reviewId)
+          .eq("vote_type", "dislike")
+
+        // Update the review with the new counts
+        const { error: updateError } = await supabase
+          .from("service_reviews")
+          .update({
+            likes: likesData?.count || 0,
+            dislikes: dislikesData?.count || 0,
+          })
+          .eq("id", reviewId)
+
+        if (updateError) {
+          console.error("Error updating review vote count after retry:", updateError)
+        }
+      } catch (retryError) {
+        console.error("Error in retry of updateReviewVoteCount:", retryError)
+      }
+    } else {
+      console.error("Error in updateReviewVoteCount:", error)
+    }
+  }
+}
+
+// Helper function to update the vote count in a reply
+async function updateReplyVoteCount(supabase: any, replyId: number) {
+  try {
+    // Count likes
+    const { data: likesData, error: likesError } = await supabase
+      .from("review_votes")
+      .select("count", { count: "exact" })
+      .eq("reply_id", replyId)
+      .eq("vote_type", "like")
+
+    // Count dislikes
+    const { data: dislikesData, error: dislikesError } = await supabase
+      .from("review_votes")
+      .select("count", { count: "exact" })
+      .eq("reply_id", replyId)
+      .eq("vote_type", "dislike")
+
+    // Update the reply with the new counts
+    const { error: updateError } = await supabase
+      .from("review_replies")
+      .update({
+        likes: likesData?.count || 0,
+        dislikes: dislikesData?.count || 0,
+      })
+      .eq("id", replyId)
+
+    if (updateError) {
+      console.error("Error updating reply vote count:", updateError)
+    }
+  } catch (error) {
+    // If we hit a rate limit, wait and try again
+    if (error instanceof Error && error.message.includes("Too Many Requests")) {
+      console.log("Rate limited on reply vote count update, waiting before retry...")
+      await delay(1000) // Wait 1 second before retrying
+
+      try {
+        // Count likes
+        const { data: likesData } = await supabase
+          .from("review_votes")
+          .select("count", { count: "exact" })
+          .eq("reply_id", replyId)
+          .eq("vote_type", "like")
+
+        // Count dislikes
+        const { data: dislikesData } = await supabase
+          .from("review_votes")
+          .select("count", { count: "exact" })
+          .eq("reply_id", replyId)
+          .eq("vote_type", "dislike")
+
+        // Update the reply with the new counts
+        const { error: updateError } = await supabase
+          .from("review_replies")
+          .update({
+            likes: likesData?.count || 0,
+            dislikes: dislikesData?.count || 0,
+          })
+          .eq("id", replyId)
+
+        if (updateError) {
+          console.error("Error updating reply vote count after retry:", updateError)
+        }
+      } catch (retryError) {
+        console.error("Error in retry of updateReplyVoteCount:", retryError)
+      }
+    } else {
+      console.error("Error in updateReplyVoteCount:", error)
     }
   }
 }

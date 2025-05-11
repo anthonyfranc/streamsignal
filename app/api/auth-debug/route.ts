@@ -1,107 +1,77 @@
 import { NextResponse } from "next/server"
-import { getSession, getUser, getServerSupabase } from "@/lib/server-auth"
+import { cookies } from "next/headers"
+import { createServerSupabaseClient, getServerUser } from "@/lib/supabase-ssr"
 
-export async function POST(request: Request) {
+export async function GET() {
   try {
-    // Get the request body
-    const body = await request.json()
-    const { action } = body || {}
+    const cookieStore = cookies()
+    const supabase = createServerSupabaseClient()
 
-    // Get user and session using our updated server auth
-    const user = await getUser()
-    const session = await getSession()
-    const supabase = await getServerSupabase()
+    // Get all cookies for debugging
+    const allCookies = cookieStore.getAll().map((c) => ({
+      name: c.name,
+      // Only show first few characters of value for security
+      value: c.value.substring(0, 5) + "...",
+      path: c.path,
+      expires: c.expires,
+    }))
 
-    // Test direct database access if requested
-    let dbAccessResult = null
-    let voteTestResult = null
+    // Get the session
+    const sessionResult = await supabase.auth.getSession()
+    const session = sessionResult.data.session
+    const sessionError = sessionResult.error
 
-    if (action === "test-db-access" && user) {
-      try {
-        // Try to read from a table that should be accessible to authenticated users
-        const { data, error } = await supabase.from("user_profiles").select("id").limit(1)
+    // Get the user
+    const userResult = await supabase.auth.getUser()
+    const user = userResult.data.user
+    const userError = userResult.error
 
-        dbAccessResult = {
-          success: !error,
-          data: data ? "Data retrieved successfully" : "No data",
-          error: error ? error.message : null,
-        }
-      } catch (dbError) {
-        dbAccessResult = {
-          success: false,
-          error: dbError instanceof Error ? dbError.message : "Unknown error",
-        }
-      }
+    // Get server user using our helper
+    const serverUserResult = await getServerUser()
+
+    // Check environment variables (redacted for security)
+    const envVars = {
+      NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL ? "✓ Set" : "✗ Missing",
+      SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY ? "✓ Set" : "✗ Missing",
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? "✓ Set" : "✗ Missing",
+      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY ? "✓ Set" : "✗ Missing",
     }
 
-    if (action === "test-vote" && user) {
-      try {
-        // Try to insert a test vote and then immediately delete it
-        const testVoteData = {
-          review_id: "1", // Use a valid review ID
-          user_id: user.id,
-          vote_type: "upvote",
-        }
-
-        // Insert test vote
-        const { data: insertData, error: insertError } = await supabase
-          .from("review_votes")
-          .insert(testVoteData)
-          .select()
-
-        if (insertError) {
-          voteTestResult = {
-            success: false,
-            phase: "insert",
-            error: insertError.message,
-            details: insertError,
-          }
-        } else {
-          // Delete the test vote
-          const voteId = insertData[0]?.id
-          const { error: deleteError } = await supabase.from("review_votes").delete().eq("id", voteId)
-
-          voteTestResult = {
-            success: !deleteError,
-            phase: deleteError ? "delete" : "complete",
-            error: deleteError ? deleteError.message : null,
-          }
-        }
-      } catch (voteError) {
-        voteTestResult = {
-          success: false,
-          phase: "exception",
-          error: voteError instanceof Error ? voteError.message : "Unknown error",
-        }
-      }
-    }
-
-    // Return debug information
     return NextResponse.json({
-      user: user
-        ? {
-            id: user.id,
-            email: user.email,
-            role: user.role,
-            lastSignIn: user.last_sign_in_at,
-          }
-        : null,
-      session: session
-        ? {
-            expires_at: session.expires_at,
-            token_type: session.token_type,
-          }
-        : null,
-      auth_status: user ? "authenticated" : "unauthenticated",
-      dbAccessResult,
-      voteTestResult,
-      timestamp: new Date().toISOString(),
+      success: true,
+      auth: {
+        sessionExists: !!session,
+        userExists: !!user,
+        userId: user?.id,
+        email: user?.email,
+        aud: user?.aud,
+        role: user?.role,
+      },
+      serverAuth: {
+        sessionExists: !!serverUserResult.session,
+        userExists: !!serverUserResult.user,
+        userId: serverUserResult.user?.id,
+        error: serverUserResult.error
+          ? serverUserResult.error instanceof Error
+            ? serverUserResult.error.message
+            : String(serverUserResult.error)
+          : null,
+      },
+      debug: {
+        cookiesCount: allCookies.length,
+        cookies: allCookies,
+        sessionError: sessionError?.message,
+        userError: userError?.message,
+        environment: envVars,
+        timestamp: new Date().toISOString(),
+      },
     })
   } catch (error) {
-    console.error("Auth debug error:", error)
+    console.error("Error in auth debug:", error)
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : "Unknown error",
+        success: false,
+        message: error instanceof Error ? error.message : "Unknown error",
         stack: error instanceof Error ? error.stack : undefined,
       },
       { status: 500 },
