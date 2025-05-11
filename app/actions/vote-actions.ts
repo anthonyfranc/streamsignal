@@ -13,6 +13,7 @@ export async function submitVote(
 ): Promise<{ success: boolean; message: string; requireAuth?: boolean }> {
   try {
     // Get the user ID directly from the server auth verification
+    // This now uses getUser() internally which is reliable according to Supabase docs
     const userId = await verifyServerAuth()
 
     // Log authentication status for debugging

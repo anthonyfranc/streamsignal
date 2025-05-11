@@ -1,19 +1,17 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { verifyServerAuth } from "@/lib/server-auth"
+import { verifyServerAuth, getServerUser } from "@/lib/server-auth"
 import { cookies } from "next/headers"
-import { createServerClient } from "@/lib/supabase-server"
 
 export async function POST(request: NextRequest) {
   try {
     // Get the user ID using our server auth verification
     const userId = await verifyServerAuth()
 
-    // Get the raw session for debugging
-    const cookieStore = cookies()
-    const supabase = createServerClient(cookieStore)
-    const { data: sessionData } = await supabase.auth.getSession()
+    // Get the raw user data for debugging
+    const { user } = await getServerUser()
 
     // Get all cookies for debugging
+    const cookieStore = cookies()
     const allCookies = cookieStore.getAll().map((c) => `${c.name}: ${c.value.substring(0, 10)}...`)
 
     if (userId) {
@@ -22,7 +20,7 @@ export async function POST(request: NextRequest) {
         userId,
         message: "Authentication successful",
         debug: {
-          sessionExists: !!sessionData.session,
+          userExists: !!user,
           cookiesCount: allCookies.length,
           // Don't include full cookie values in response for security
           cookieNames: cookieStore.getAll().map((c) => c.name),
@@ -33,7 +31,7 @@ export async function POST(request: NextRequest) {
         authenticated: false,
         message: "Not authenticated",
         debug: {
-          sessionExists: !!sessionData.session,
+          userExists: !!user,
           cookiesCount: allCookies.length,
           // Don't include full cookie values in response for security
           cookieNames: cookieStore.getAll().map((c) => c.name),
