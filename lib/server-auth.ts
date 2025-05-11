@@ -1,14 +1,34 @@
+// Import cookies but in a way that can be mocked
+import { cookies as nextCookies } from "next/headers"
 import { createServerClient } from "@supabase/ssr"
 import type { Database } from "@/types/database"
 
-// Universal function that works in both App Router and Pages Router
+// Helper to safely access cookies
+function getCookieStore() {
+  try {
+    return nextCookies()
+  } catch (e) {
+    // Return a mock implementation if nextCookies() fails
+    // This will happen in Pages Router
+    return {
+      get: () => null,
+      getAll: () => [],
+      set: () => {},
+      delete: () => {},
+    }
+  }
+}
+
+/**
+ * Gets the current authenticated user from the server
+ */
 export async function getServerUser(context?: any) {
   try {
     let supabase
 
-    // Check if we're in API Routes or getServerSideProps (Pages Router)
+    // Check if we're in Pages Router (context provided)
     if (context && context.req && context.res) {
-      // We're in Pages Router
+      // Create Supabase client for Pages Router
       supabase = createServerClient<Database>(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -35,36 +55,34 @@ export async function getServerUser(context?: any) {
         },
       )
     } else {
-      // We're in App Router or Client Component
-      const cookieGetter = () => {
-        try {
-          // This will work in Server Components when the request is available
-          // but will throw an error in Client Components
-          const requestCookies = require("@/lib/request-cookies").getCookies()
-          return requestCookies
-        } catch (e) {
-          // We're likely in a Client Component or other context without request access
-          return {}
-        }
-      }
+      // We're in App Router
+      const cookieStore = getCookieStore()
 
-      const cookies = cookieGetter()
-
+      // Create Supabase client for App Router
       supabase = createServerClient<Database>(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
         {
           cookies: {
             get(name: string) {
-              return cookies[name]
+              const cookie = cookieStore.get(name)
+              return cookie?.value
             },
             set(name: string, value: string, options: any) {
-              // In App Router, we can't set cookies from most Server Components
-              console.log(`Cookie set attempted: ${name}`)
+              try {
+                cookieStore.set({ name, value, ...options })
+              } catch (e) {
+                // Expected error in Server Components
+                console.log(`Cannot set cookie in Server Component: ${name}`)
+              }
             },
             remove(name: string, options: any) {
-              // In App Router, we can't remove cookies from most Server Components
-              console.log(`Cookie remove attempted: ${name}`)
+              try {
+                cookieStore.delete({ name, ...options })
+              } catch (e) {
+                // Expected error in Server Components
+                console.log(`Cannot delete cookie in Server Component: ${name}`)
+              }
             },
           },
         },

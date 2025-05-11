@@ -1,48 +1,57 @@
 import { NextResponse } from "next/server"
 import { createServerClient } from "@supabase/ssr"
-import { getCookies } from "@/lib/request-cookies"
 import { getServerUser } from "@/lib/server-auth"
+
+// Try to import cookies safely
+let cookiesFunction: any
+try {
+  const { cookies } = require("next/headers")
+  cookiesFunction = cookies
+} catch (e) {
+  // Mock implementation if import fails
+  cookiesFunction = () => ({
+    getAll: () => [],
+    get: () => null,
+  })
+}
 
 export async function GET(request: Request) {
   try {
     console.log("Auth debug endpoint called")
 
-    // Get cookies from our custom store
-    const cookies = getCookies()
-    const allCookies = Object.entries(cookies).map(([name, value]) => ({
-      name,
-      value: value.substring(0, 5) + "...",
-    }))
-
-    // Check for Supabase auth cookie specifically
-    const authCookieName = Object.keys(cookies).find((name) => name.includes("sb-") && name.includes("-auth-token"))
-
-    console.log("Auth cookie found:", authCookieName)
+    // Try to get cookies safely
+    let allCookies = []
+    try {
+      const cookieStore = cookiesFunction()
+      allCookies = cookieStore.getAll().map((c: any) => ({
+        name: c.name,
+        value: c.value.substring(0, 5) + "...",
+      }))
+    } catch (e) {
+      console.log("Could not access cookies via next/headers")
+    }
 
     // Check auth state using our getServerUser function
     console.log("Calling getServerUser...")
     const { user, error } = await getServerUser()
     console.log("getServerUser result:", !!user, error?.message)
 
-    // Also check directly with Supabase for comparison
-    console.log("Creating direct Supabase client...")
+    // Create a Supabase client that doesn't rely on cookies()
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
         cookies: {
           get(name: string) {
-            const cookie = cookies[name]
-            console.log(`Direct cookie get: ${name}, found: ${!!cookie}`)
-            return cookie
+            // This is a fallback that will work at build time
+            // but won't actually get cookies
+            return null
           },
           set(name: string, value: string, options: any) {
-            console.log(`Direct cookie set: ${name}`)
-            // Can't set cookies in this context
+            // No-op
           },
           remove(name: string, options: any) {
-            console.log(`Direct cookie remove: ${name}`)
-            // Can't remove cookies in this context
+            // No-op
           },
         },
       },
@@ -51,24 +60,20 @@ export async function GET(request: Request) {
     // Get user data directly
     console.log("Calling direct getUser...")
     const { data: userData, error: userError } = await supabase.auth.getUser()
-    console.log("Direct getUser result:", !!userData.user, userError?.message)
 
     // Get session data directly
     console.log("Calling direct getSession...")
     const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
-    console.log("Direct getSession result:", !!sessionData.session, sessionError?.message)
 
     return NextResponse.json({
       authenticated: !!user,
       userId: user?.id ? user.id.substring(0, 8) + "..." : null,
       error: error ? error.message : null,
       cookieCount: allCookies.length,
-      authCookiePresent: !!authCookieName,
-      authCookieName,
       cookies: allCookies,
       directCheck: {
-        userPresent: !!userData.user,
-        sessionPresent: !!sessionData.session,
+        userPresent: !!userData?.user,
+        sessionPresent: !!sessionData?.session,
         userError: userError?.message,
         sessionError: sessionError?.message,
       },
