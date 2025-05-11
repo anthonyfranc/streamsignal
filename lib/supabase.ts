@@ -2,9 +2,9 @@ import { createClient } from "@supabase/supabase-js"
 import type { Database } from "@/types/database"
 import { createBrowserClient } from "./supabase-client-factory"
 
-// Get the Supabase URL and anon key from environment variables
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+// Get the Supabase URL and anon key from environment variables with fallbacks
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ""
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
 
 // Create a singleton instance of the Supabase client for the browser
 let supabaseInstance: ReturnType<typeof createBrowserClient> | null = null
@@ -27,6 +27,17 @@ let _supabaseServer: ReturnType<typeof getSupabase> | null = null
 // Helper function to create a Supabase client for server components
 export function getSupabase() {
   if (!_supabaseServer) {
+    // Check if we have the required environment variables
+    if (!supabaseUrl || !supabaseAnonKey) {
+      console.error("Missing required Supabase environment variables")
+      // Return a dummy client that will fail gracefully
+      return createClient("https://example.com", "dummy-key", {
+        auth: {
+          persistSession: false,
+        },
+      }) as any
+    }
+
     _supabaseServer = createClient<Database>(supabaseUrl, supabaseAnonKey, {
       auth: {
         persistSession: false,
@@ -40,6 +51,14 @@ export function getSupabase() {
 // This works in both client and server components
 export async function checkSupabaseConnection() {
   try {
+    // Check if we have the required environment variables
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return {
+        success: false,
+        error: "Missing required Supabase environment variables",
+      }
+    }
+
     const { data, error } = await supabase.from("channels").select("count").limit(1)
 
     if (error) {

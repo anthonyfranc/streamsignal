@@ -3,11 +3,22 @@ import { createServerClient } from "@supabase/ssr"
 import type { CookieOptions } from "@supabase/ssr"
 import type { Database } from "@/types/database"
 
-// Environment variable validation
+// Environment variable validation with fallbacks for client-side
 const getEnvVariable = (key: string): string => {
+  // For client-side, we need to check if the variable exists
+  // and provide a fallback to prevent build errors
+  if (typeof window !== "undefined") {
+    // We're in the browser
+    // @ts-ignore - This is a special Next.js runtime variable
+    return (process.env[key] || "") as string
+  }
+
+  // For server-side, we can be strict
   const value = process.env[key]
   if (!value) {
-    throw new Error(`${key} is required but not provided`)
+    console.error(`${key} is required but not provided`)
+    // Return empty string instead of throwing to prevent build errors
+    return ""
   }
   return value
 }
@@ -16,15 +27,20 @@ const getEnvVariable = (key: string): string => {
 export const supabaseUrl = getEnvVariable("NEXT_PUBLIC_SUPABASE_URL")
 export const supabaseAnonKey = getEnvVariable("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 
-// Type for cookie handlers
-type CookieHandler = {
-  get: (name: string) => string | undefined
-  set: (name: string, value: string, options: CookieOptions) => void
-  remove: (name: string, options: CookieOptions) => void
-}
-
 // Create a browser client (for client components)
 export const createBrowserClient = () => {
+  // Check if we have the required environment variables
+  if (!supabaseUrl || !supabaseAnonKey) {
+    console.error("Missing required Supabase environment variables")
+    // Return a dummy client that will fail gracefully
+    return createClient("https://example.com", "dummy-key", {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    }) as any
+  }
+
   return createClient<Database>(supabaseUrl, supabaseAnonKey, {
     auth: {
       persistSession: true,

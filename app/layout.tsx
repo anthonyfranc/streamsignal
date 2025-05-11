@@ -4,6 +4,7 @@ import { Inter } from "next/font/google"
 import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
 import { ClientLayout } from "@/components/client-layout"
+import { SupabaseErrorBoundary } from "@/components/supabase-error-boundary"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -22,7 +23,9 @@ export default function RootLayout({
     <html lang="en">
       <body className={inter.className}>
         <ThemeProvider>
-          <ClientLayout>{children}</ClientLayout>
+          <SupabaseErrorBoundary>
+            <ClientLayout>{children}</ClientLayout>
+          </SupabaseErrorBoundary>
         </ThemeProvider>
       </body>
     </html>
