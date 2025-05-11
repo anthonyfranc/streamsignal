@@ -12,6 +12,7 @@ import { ThemeProvider } from "@/components/theme-provider"
 import { AuthProvider } from "@/contexts/auth-context"
 import { SessionMonitor } from "@/components/auth/session-monitor"
 import { SessionExpiryWarning } from "@/components/auth/session-expiry-warning"
+import { AuthDebugger } from "@/components/auth/auth-debugger"
 
 export function ClientLayout({ children }: { children: React.ReactNode }) {
   const isAdminRoute = useIsAdminRoute()
@@ -75,6 +76,7 @@ export function ClientLayout({ children }: { children: React.ReactNode }) {
           <SiteHeader featuredServices={featuredServices} featuredChannels={featuredChannels} />
           <main className="flex-1">{children}</main>
           <SiteFooter />
+          {process.env.NODE_ENV !== "production" && <AuthDebugger />}
         </div>
         <SessionExpiryWarning />
       </AuthProvider>

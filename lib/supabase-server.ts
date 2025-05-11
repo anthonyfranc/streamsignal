@@ -42,6 +42,7 @@ export function createServerClient(cookieStore?: ReturnType<typeof cookies>) {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
+        detectSessionInUrl: false, // Disable detecting session in URL to avoid issues with server components
       },
     })
   }
@@ -50,6 +51,7 @@ export function createServerClient(cookieStore?: ReturnType<typeof cookies>) {
   return createClient<Database>(supabaseUrl, supabaseKey, {
     auth: {
       persistSession: false,
+      autoRefreshToken: false,
     },
   })
 }

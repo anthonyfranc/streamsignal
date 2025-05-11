@@ -14,18 +14,32 @@ export async function submitVote(
     const cookieStore = cookies()
     const supabase = createServerClient(cookieStore)
 
-    // Check if user is authenticated
+    // Check if user is authenticated - with enhanced logging
     const {
       data: { session },
+      error: sessionError,
     } = await supabase.auth.getSession()
 
+    if (sessionError) {
+      console.error("Error getting session in submitVote:", sessionError)
+      return {
+        success: false,
+        message: "Authentication error. Please try signing in again.",
+        requireAuth: true,
+      }
+    }
+
     if (!session) {
+      console.warn("No session found in submitVote")
       return {
         success: false,
         message: "You must be logged in to vote",
         requireAuth: true,
       }
     }
+
+    // Log successful authentication
+    console.log(`Vote action authenticated for user: ${session.user.id.substring(0, 8)}...`)
 
     // Extract and validate data
     const reviewId = formData.get("reviewId") ? Number.parseInt(formData.get("reviewId") as string) : null

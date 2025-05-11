@@ -661,6 +661,16 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
           // Ensure we have a fresh session before submitting the vote
           await refreshSession()
 
+          // Double-check authentication after refresh
+          const { data: authData } = await supabase.auth.getSession()
+          if (!authData.session) {
+            console.error("No session after refresh, cannot vote")
+            setAuthModalOpen(true)
+            throw new Error("Authentication required")
+          }
+
+          console.log("Submitting vote with auth token:", authData.session.access_token.substring(0, 10) + "...")
+
           const formData = new FormData()
           formData.append("reviewId", review.id.toString())
           formData.append("voteType", voteType)
@@ -671,6 +681,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
           if (!result.success) {
             if (result.requireAuth) {
               // Session expired or not valid on server
+              console.error("Server reports auth required:", result.message)
               setAuthModalOpen(true)
             }
             throw new Error(result.message || "Failed to submit vote")
