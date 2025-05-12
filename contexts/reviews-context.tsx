@@ -3,8 +3,52 @@
 import type React from "react"
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react"
 import { supabase } from "@/lib/supabase"
-import { getCurrentUser } from "@/lib/auth-utils"
 import type { ServiceReview, ReviewComment } from "@/types/reviews"
+
+// Safely get user from session
+async function getCurrentUser() {
+  try {
+    const { data, error } = await supabase.auth.getSession()
+    if (error || !data.session) {
+      return null
+    }
+    return data.session.user
+  } catch (error) {
+    console.error("Error getting current user:", error)
+    return null
+  }
+}
+
+// Safely get display name from user data
+function getDisplayNameFromData(user: any, userProfile: any): string {
+  if (!user) return "Anonymous"
+
+  try {
+    // First try to get the display name from user_profiles
+    if (userProfile && userProfile.display_name) {
+      return userProfile.display_name
+    }
+
+    // If no profile or no display name, try to get the name from user metadata
+    const metadata = user.user_metadata || {}
+    const fullName = metadata.full_name || metadata.name || metadata.preferred_username
+
+    if (fullName) return fullName
+
+    // If no name is found, try to use the email
+    const email = user.email
+    if (email && typeof email === "string") {
+      // Return the part before the @ symbol
+      return email.split("@")[0]
+    }
+
+    // If all else fails, return the user ID truncated
+    return user.id ? `User ${user.id.substring(0, 6)}` : "Anonymous"
+  } catch (error) {
+    console.error("Error getting display name:", error)
+    return "Anonymous"
+  }
+}
 
 type ReviewsContextType = {
   reviews: ServiceReview[]
@@ -65,6 +109,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (error) {
         console.error("Error checking user:", error)
+        setCurrentUser(null)
       }
     }
 
@@ -91,11 +136,23 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           console.error("Error fetching reviews:", error)
           setReviews([])
         } else {
-          setReviews(data || [])
+          // Ensure all reviews have required properties
+          const safeReviews = (data || []).map((review) => ({
+            ...review,
+            author_name: review.author_name || "Anonymous",
+            content: review.content || "",
+            title: review.title || "Review",
+            rating: review.rating || 0,
+            likes: review.likes || 0,
+            dislikes: review.dislikes || 0,
+            created_at: review.created_at || new Date().toISOString(),
+          }))
+
+          setReviews(safeReviews)
 
           // If user is logged in, fetch their reactions to these reviews
           if (currentUser) {
-            const reviewIds = data?.map((review) => review.id) || []
+            const reviewIds = safeReviews.map((review) => review.id) || []
 
             if (reviewIds.length > 0) {
               try {
@@ -108,7 +165,9 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
                 if (!reactionsError && reactions) {
                   const newUserReactions: Record<string, string> = {}
                   reactions.forEach((reaction) => {
-                    newUserReactions[`review_${reaction.review_id}`] = reaction.reaction_type
+                    if (reaction && reaction.review_id) {
+                      newUserReactions[`review_${reaction.review_id}`] = reaction.reaction_type
+                    }
                   })
                   setUserReactions((prev) => ({
                     ...prev,
@@ -189,7 +248,9 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
             if (!reactionsError && reactions) {
               reactions.forEach((reaction) => {
-                userReactionsMap[`comment_${reaction.comment_id}`] = reaction.reaction_type
+                if (reaction && reaction.comment_id) {
+                  userReactionsMap[`comment_${reaction.comment_id}`] = reaction.reaction_type
+                }
               })
 
               // Update user reactions state
@@ -209,30 +270,46 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         // Process top-level comments
         const processedTopComments =
           topLevelComments?.map((comment) => {
-            const processedComment = {
+            // Ensure all required properties exist
+            const safeComment = {
               ...comment,
+              author_name: comment.author_name || "Anonymous",
+              content: comment.content || "",
+              likes: comment.likes || 0,
+              dislikes: comment.dislikes || 0,
+              nesting_level: comment.nesting_level || 1,
+              created_at: comment.created_at || new Date().toISOString(),
               replies: [],
               user_reaction: userReactionsMap[`comment_${comment.id}`] || null,
             }
-            commentMap.set(comment.id, processedComment)
-            return processedComment
+            commentMap.set(comment.id, safeComment)
+            return safeComment
           }) || []
 
         // Process replies and build the tree
         allReplies?.forEach((reply) => {
-          const processedReply = {
+          if (!reply || !reply.id || !reply.parent_comment_id) return
+
+          // Ensure all required properties exist
+          const safeReply = {
             ...reply,
+            author_name: reply.author_name || "Anonymous",
+            content: reply.content || "",
+            likes: reply.likes || 0,
+            dislikes: reply.dislikes || 0,
+            nesting_level: reply.nesting_level || 2,
+            created_at: reply.created_at || new Date().toISOString(),
             replies: [],
             user_reaction: userReactionsMap[`comment_${reply.id}`] || null,
           }
 
-          commentMap.set(reply.id, processedReply)
+          commentMap.set(reply.id, safeReply)
 
           // Add this reply to its parent's replies array
           if (reply.parent_comment_id && commentMap.has(reply.parent_comment_id)) {
             const parent = commentMap.get(reply.parent_comment_id)
             if (parent && parent.replies) {
-              parent.replies.push(processedReply)
+              parent.replies.push(safeReply)
             }
           }
         })
@@ -273,11 +350,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
       try {
         // Get display name from user_profiles or metadata
-        const authorName =
-          currentUser.user_metadata?.full_name ||
-          currentUser.user_metadata?.name ||
-          userProfile?.display_name ||
-          "Anonymous"
+        const authorName = getDisplayNameFromData(currentUser, userProfile)
 
         // Get avatar URL from user_profiles or metadata
         const authorAvatar = userProfile?.avatar_url || currentUser.user_metadata?.avatar_url || null
@@ -307,7 +380,9 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         }
 
         // Update reviews state with the new review
-        setReviews((prev) => [data[0], ...prev])
+        if (data && data[0]) {
+          setReviews((prev) => [data[0], ...prev])
+        }
 
         return { success: true }
       } catch (error) {
@@ -330,11 +405,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
       try {
         // Get display name from user_profiles or metadata
-        const authorName =
-          currentUser.user_metadata?.full_name ||
-          currentUser.user_metadata?.name ||
-          userProfile?.display_name ||
-          "Anonymous"
+        const authorName = getDisplayNameFromData(currentUser, userProfile)
 
         // Get avatar URL from user_profiles or metadata
         const authorAvatar = userProfile?.avatar_url || currentUser.user_metadata?.avatar_url || null
@@ -360,19 +431,21 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         }
 
         // Update comments state with the new comment
-        const newComment = {
-          ...data[0],
-          replies: [],
-          user_reaction: null,
-        }
-
-        setComments((prev) => {
-          const existingComments = prev[reviewId] || []
-          return {
-            ...prev,
-            [reviewId]: [...existingComments, newComment],
+        if (data && data[0]) {
+          const newComment = {
+            ...data[0],
+            replies: [],
+            user_reaction: null,
           }
-        })
+
+          setComments((prev) => {
+            const existingComments = prev[reviewId] || []
+            return {
+              ...prev,
+              [reviewId]: [...existingComments, newComment],
+            }
+          })
+        }
 
         return { success: true }
       } catch (error) {
@@ -401,11 +474,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
       try {
         // Get display name from user_profiles or metadata
-        const authorName =
-          currentUser.user_metadata?.full_name ||
-          currentUser.user_metadata?.name ||
-          userProfile?.display_name ||
-          "Anonymous"
+        const authorName = getDisplayNameFromData(currentUser, userProfile)
 
         // Get avatar URL from user_profiles or metadata
         const authorAvatar = userProfile?.avatar_url || currentUser.user_metadata?.avatar_url || null
@@ -453,7 +522,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
-        if (reviewId) {
+        if (reviewId && data && data[0]) {
           // Update the comments state by adding the reply to the parent comment
           const newReply = {
             ...data[0],
@@ -482,7 +551,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
             return {
               ...prev,
-              [reviewId]: updateReplies(prev[reviewId] || []),
+              [reviewId!]: updateReplies(prev[reviewId!] || []),
             }
           })
         }
@@ -519,8 +588,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
               let dislikes = review.dislikes || 0
 
               // Remove previous reaction if exists
-              if (currentReaction === "like") likes--
-              if (currentReaction === "dislike") dislikes--
+              if (currentReaction === "like") likes = Math.max(0, likes - 1)
+              if (currentReaction === "dislike") dislikes = Math.max(0, dislikes - 1)
 
               // Add new reaction if not removing
               if (!isRemovingReaction) {
@@ -579,8 +648,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           let dislikes = review.dislikes || 0
 
           // Remove previous reaction if exists
-          if (currentReaction === "like") likes--
-          if (currentReaction === "dislike") dislikes--
+          if (currentReaction === "like") likes = Math.max(0, likes - 1)
+          if (currentReaction === "dislike") dislikes = Math.max(0, dislikes - 1)
 
           // Add new reaction if not removing
           if (!isRemovingReaction) {
@@ -629,8 +698,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
                 let dislikes = comment.dislikes || 0
 
                 // Remove previous reaction if exists
-                if (currentReaction === "like") likes--
-                if (currentReaction === "dislike") dislikes--
+                if (currentReaction === "like") likes = Math.max(0, likes - 1)
+                if (currentReaction === "dislike") dislikes = Math.max(0, dislikes - 1)
 
                 // Add new reaction if not removing
                 if (!isRemovingReaction) {
@@ -703,8 +772,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           let dislikes = comment.dislikes || 0
 
           // Remove previous reaction if exists
-          if (currentReaction === "like") likes--
-          if (currentReaction === "dislike") dislikes--
+          if (currentReaction === "like") likes = Math.max(0, likes - 1)
+          if (currentReaction === "dislike") dislikes = Math.max(0, dislikes - 1)
 
           // Add new reaction if not removing
           if (!isRemovingReaction) {

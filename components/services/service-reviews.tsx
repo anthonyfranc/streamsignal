@@ -13,7 +13,6 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { ReviewCommentsSection } from "./review-comments-section"
 import { AuthButton } from "@/components/auth/auth-button"
-import { getDisplayNameFromData } from "@/lib/auth-utils"
 import { cn } from "@/lib/utils"
 import { ReviewsProvider, useReviews } from "@/contexts/reviews-context"
 
@@ -71,8 +70,15 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
   useEffect(() => {
     if (currentUser) {
       try {
-        const displayName = getDisplayNameFromData(currentUser, userProfile)
-        setUserDisplayName(displayName || "Anonymous")
+        // Safely extract display name
+        const displayName =
+          userProfile?.display_name ||
+          currentUser.user_metadata?.full_name ||
+          currentUser.user_metadata?.name ||
+          (currentUser.email && typeof currentUser.email === "string" ? currentUser.email.split("@")[0] : null) ||
+          "Anonymous"
+
+        setUserDisplayName(displayName)
       } catch (error) {
         console.error("Error setting user display name:", error)
         setUserDisplayName("Anonymous")
@@ -82,10 +88,11 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
 
   // Filter reviews based on selected filter
   const filteredReviews = reviews.filter((review) => {
+    if (!review || typeof review !== "object") return false
     if (reviewFilter === "all") return true
-    if (reviewFilter === "positive") return review.rating >= 4
-    if (reviewFilter === "neutral") return review.rating === 3
-    if (reviewFilter === "negative") return review.rating <= 2
+    if (reviewFilter === "positive") return (review.rating || 0) >= 4
+    if (reviewFilter === "neutral") return (review.rating || 0) === 3
+    if (reviewFilter === "negative") return (review.rating || 0) <= 2
     return true
   })
 
@@ -164,22 +171,33 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
     await reactToReview(reviewId, reactionType)
   }
 
-  // Get initials for avatar fallback - FIXED to handle non-string inputs
-  const getInitials = (name: string | null | undefined): string => {
-    if (!name || typeof name !== "string") return "AN"
+  // Get initials for avatar fallback - with comprehensive error handling
+  const getInitials = (name: any): string => {
+    // If name is not provided or not a string, return default
+    if (!name || typeof name !== "string" || name.trim() === "") {
+      return "AN"
+    }
 
-    return (
-      name
-        .split(" ")
-        .map((part) => part[0] || "")
-        .join("")
-        .toUpperCase()
-        .substring(0, 2) || "AN"
-    )
+    try {
+      // Split the name and get initials
+      const parts = name.trim().split(/\s+/)
+      if (parts.length === 0) return "AN"
+
+      if (parts.length === 1) {
+        return (parts[0].charAt(0) || "A").toUpperCase()
+      }
+
+      return ((parts[0].charAt(0) || "A") + (parts[parts.length - 1].charAt(0) || "N")).toUpperCase()
+    } catch (error) {
+      console.error("Error getting initials:", error, "for name:", name)
+      return "AN"
+    }
   }
 
-  // Format date
-  const formatDate = (dateString: string) => {
+  // Format date - with error handling
+  const formatDate = (dateString: string | null | undefined) => {
+    if (!dateString) return "recently"
+
     try {
       return formatDistanceToNow(new Date(dateString), { addSuffix: true })
     } catch (error) {
@@ -438,207 +456,209 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
             </CardFooter>
           </Card>
         ) : (
-          filteredReviews.map((review) => (
-            <div
-              key={review.id}
-              className="group rounded-xl border bg-card shadow-sm overflow-hidden hover:shadow-md transition-shadow"
-            >
-              <div className="p-4 sm:p-5">
-                <div className="flex items-start gap-3">
-                  <Avatar className="h-10 w-10 border shadow-sm">
-                    <AvatarImage
-                      src={review.author_avatar || "/placeholder.svg"}
-                      alt={review.author_name || "Anonymous"}
-                    />
-                    <AvatarFallback className="bg-primary/10 text-primary">
-                      {getInitials(review.author_name)}
-                    </AvatarFallback>
-                  </Avatar>
+          filteredReviews.map((review) => {
+            // Safely access review properties with fallbacks
+            const reviewId = review?.id || 0
+            const authorName = review?.author_name || "Anonymous"
+            const authorAvatar = review?.author_avatar || "/placeholder.svg"
+            const reviewTitle = review?.title || "Review"
+            const reviewContent = review?.content || ""
+            const reviewRating = review?.rating || 0
+            const likes = review?.likes || 0
+            const createdAt = review?.created_at || new Date().toISOString()
+            const interfaceRating = review?.interface_rating
+            const reliabilityRating = review?.reliability_rating
+            const contentRating = review?.content_rating
+            const valueRating = review?.value_rating
 
-                  <div className="flex-1">
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h4 className="font-semibold">{review.author_name || "Anonymous"}</h4>
-                          <div className="flex">
-                            {[1, 2, 3, 4, 5].map((star) => (
-                              <Star
-                                key={star}
-                                className={cn(
-                                  "h-4 w-4",
-                                  star <= review.rating ? "text-primary fill-primary" : "text-muted stroke-muted",
-                                )}
-                                strokeWidth={1.5}
-                              />
-                            ))}
+            return (
+              <div
+                key={reviewId}
+                className="group rounded-xl border bg-card shadow-sm overflow-hidden hover:shadow-md transition-shadow"
+              >
+                <div className="p-4 sm:p-5">
+                  <div className="flex items-start gap-3">
+                    <Avatar className="h-10 w-10 border shadow-sm">
+                      <AvatarImage src={authorAvatar || "/placeholder.svg"} alt={authorName} />
+                      <AvatarFallback className="bg-primary/10 text-primary">{getInitials(authorName)}</AvatarFallback>
+                    </Avatar>
+
+                    <div className="flex-1">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-semibold">{authorName}</h4>
+                            <div className="flex">
+                              {[1, 2, 3, 4, 5].map((star) => (
+                                <Star
+                                  key={star}
+                                  className={cn(
+                                    "h-4 w-4",
+                                    star <= reviewRating ? "text-primary fill-primary" : "text-muted stroke-muted",
+                                  )}
+                                  strokeWidth={1.5}
+                                />
+                              ))}
+                            </div>
                           </div>
+                          <span className="text-xs text-muted-foreground">{formatDate(createdAt)}</span>
                         </div>
-                        <span className="text-xs text-muted-foreground">{formatDate(review.created_at)}</span>
+
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <MoreHorizontal className="h-4 w-4" />
+                        </Button>
                       </div>
 
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
-                      >
-                        <MoreHorizontal className="h-4 w-4" />
-                      </Button>
-                    </div>
+                      <h5 className="font-medium mt-2 text-lg">{reviewTitle}</h5>
 
-                    <h5 className="font-medium mt-2 text-lg">{review.title}</h5>
-
-                    <div className="mt-1.5">
-                      {review.content && review.content.length > 200 && !expandedReviews[review.id] ? (
-                        <>
-                          <p className="text-sm leading-relaxed">{review.content.substring(0, 200)}...</p>
-                          <button
-                            className="text-sm text-primary hover:text-primary/80 font-medium mt-1"
-                            onClick={() => toggleReviewExpansion(review.id)}
-                          >
-                            See more
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <p className="text-sm leading-relaxed">{review.content}</p>
-                          {review.content && review.content.length > 200 && (
+                      <div className="mt-1.5">
+                        {reviewContent && reviewContent.length > 200 && !expandedReviews[reviewId] ? (
+                          <>
+                            <p className="text-sm leading-relaxed">{reviewContent.substring(0, 200)}...</p>
                             <button
                               className="text-sm text-primary hover:text-primary/80 font-medium mt-1"
-                              onClick={() => toggleReviewExpansion(review.id)}
+                              onClick={() => toggleReviewExpansion(reviewId)}
                             >
-                              See less
+                              See more
                             </button>
-                          )}
-                        </>
-                      )}
-                    </div>
-
-                    {/* Detailed ratings if available */}
-                    {(review.interface_rating ||
-                      review.reliability_rating ||
-                      review.content_rating ||
-                      review.value_rating) && (
-                      <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-xs p-3 bg-muted/30 rounded-lg">
-                        {review.interface_rating && (
-                          <div className="flex items-center justify-between">
-                            <span className="text-muted-foreground">Interface:</span>
-                            <div className="flex">
-                              {[1, 2, 3, 4, 5].map((star) => (
-                                <Star
-                                  key={star}
-                                  className={cn(
-                                    "h-3 w-3",
-                                    star <= review.interface_rating!
-                                      ? "text-primary fill-primary"
-                                      : "text-muted stroke-muted",
-                                  )}
-                                  strokeWidth={1.5}
-                                />
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {review.reliability_rating && (
-                          <div className="flex items-center justify-between">
-                            <span className="text-muted-foreground">Reliability:</span>
-                            <div className="flex">
-                              {[1, 2, 3, 4, 5].map((star) => (
-                                <Star
-                                  key={star}
-                                  className={cn(
-                                    "h-3 w-3",
-                                    star <= review.reliability_rating!
-                                      ? "text-primary fill-primary"
-                                      : "text-muted stroke-muted",
-                                  )}
-                                  strokeWidth={1.5}
-                                />
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {review.content_rating && (
-                          <div className="flex items-center justify-between">
-                            <span className="text-muted-foreground">Content:</span>
-                            <div className="flex">
-                              {[1, 2, 3, 4, 5].map((star) => (
-                                <Star
-                                  key={star}
-                                  className={cn(
-                                    "h-3 w-3",
-                                    star <= review.content_rating!
-                                      ? "text-primary fill-primary"
-                                      : "text-muted stroke-muted",
-                                  )}
-                                  strokeWidth={1.5}
-                                />
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {review.value_rating && (
-                          <div className="flex items-center justify-between">
-                            <span className="text-muted-foreground">Value:</span>
-                            <div className="flex">
-                              {[1, 2, 3, 4, 5].map((star) => (
-                                <Star
-                                  key={star}
-                                  className={cn(
-                                    "h-3 w-3",
-                                    star <= review.value_rating!
-                                      ? "text-primary fill-primary"
-                                      : "text-muted stroke-muted",
-                                  )}
-                                  strokeWidth={1.5}
-                                />
-                              ))}
-                            </div>
-                          </div>
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-sm leading-relaxed">{reviewContent}</p>
+                            {reviewContent && reviewContent.length > 200 && (
+                              <button
+                                className="text-sm text-primary hover:text-primary/80 font-medium mt-1"
+                                onClick={() => toggleReviewExpansion(reviewId)}
+                              >
+                                See less
+                              </button>
+                            )}
+                          </>
                         )}
                       </div>
-                    )}
 
-                    <div className="flex items-center gap-4 mt-4">
-                      <button
-                        className={cn(
-                          "flex items-center gap-1.5 text-sm transition-colors",
-                          getUserReactionToReview(review.id) === "like"
-                            ? "text-primary font-medium"
-                            : "text-muted-foreground hover:text-primary",
-                        )}
-                        onClick={() => handleReviewReaction(review.id, "like")}
-                      >
-                        <ThumbsUp
-                          className={cn("h-4 w-4", getUserReactionToReview(review.id) === "like" && "fill-primary")}
-                        />
-                        <span>Helpful{review.likes > 0 && ` (${review.likes})`}</span>
-                      </button>
-                      <button
-                        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-primary transition-colors"
-                        onClick={() => toggleComments(review.id)}
-                      >
-                        <MessageSquare className="h-4 w-4" />
-                        <span>Comment</span>
-                      </button>
+                      {/* Detailed ratings if available */}
+                      {(interfaceRating || reliabilityRating || contentRating || valueRating) && (
+                        <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-xs p-3 bg-muted/30 rounded-lg">
+                          {interfaceRating && (
+                            <div className="flex items-center justify-between">
+                              <span className="text-muted-foreground">Interface:</span>
+                              <div className="flex">
+                                {[1, 2, 3, 4, 5].map((star) => (
+                                  <Star
+                                    key={star}
+                                    className={cn(
+                                      "h-3 w-3",
+                                      star <= interfaceRating ? "text-primary fill-primary" : "text-muted stroke-muted",
+                                    )}
+                                    strokeWidth={1.5}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {reliabilityRating && (
+                            <div className="flex items-center justify-between">
+                              <span className="text-muted-foreground">Reliability:</span>
+                              <div className="flex">
+                                {[1, 2, 3, 4, 5].map((star) => (
+                                  <Star
+                                    key={star}
+                                    className={cn(
+                                      "h-3 w-3",
+                                      star <= reliabilityRating
+                                        ? "text-primary fill-primary"
+                                        : "text-muted stroke-muted",
+                                    )}
+                                    strokeWidth={1.5}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {contentRating && (
+                            <div className="flex items-center justify-between">
+                              <span className="text-muted-foreground">Content:</span>
+                              <div className="flex">
+                                {[1, 2, 3, 4, 5].map((star) => (
+                                  <Star
+                                    key={star}
+                                    className={cn(
+                                      "h-3 w-3",
+                                      star <= contentRating ? "text-primary fill-primary" : "text-muted stroke-muted",
+                                    )}
+                                    strokeWidth={1.5}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {valueRating && (
+                            <div className="flex items-center justify-between">
+                              <span className="text-muted-foreground">Value:</span>
+                              <div className="flex">
+                                {[1, 2, 3, 4, 5].map((star) => (
+                                  <Star
+                                    key={star}
+                                    className={cn(
+                                      "h-3 w-3",
+                                      star <= valueRating ? "text-primary fill-primary" : "text-muted stroke-muted",
+                                    )}
+                                    strokeWidth={1.5}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="flex items-center gap-4 mt-4">
+                        <button
+                          className={cn(
+                            "flex items-center gap-1.5 text-sm transition-colors",
+                            getUserReactionToReview(reviewId) === "like"
+                              ? "text-primary font-medium"
+                              : "text-muted-foreground hover:text-primary",
+                          )}
+                          onClick={() => handleReviewReaction(reviewId, "like")}
+                        >
+                          <ThumbsUp
+                            className={cn("h-4 w-4", getUserReactionToReview(reviewId) === "like" && "fill-primary")}
+                          />
+                          <span>Helpful{likes > 0 && ` (${likes})`}</span>
+                        </button>
+                        <button
+                          className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-primary transition-colors"
+                          onClick={() => toggleComments(reviewId)}
+                        >
+                          <MessageSquare className="h-4 w-4" />
+                          <span>Comment</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Comments section for this review */}
-              <div
-                className={cn(
-                  "border-t bg-muted/20 p-4 sm:p-5 transition-all duration-300",
-                  expandedComments[review.id] ? "max-h-[1000px] opacity-100" : "max-h-0 opacity-0 hidden",
-                )}
-              >
-                <ReviewCommentsSection reviewId={review.id} serviceId={serviceId} />
+                {/* Comments section for this review */}
+                <div
+                  className={cn(
+                    "border-t bg-muted/20 p-4 sm:p-5 transition-all duration-300",
+                    expandedComments[reviewId] ? "max-h-[1000px] opacity-100" : "max-h-0 opacity-0 hidden",
+                  )}
+                >
+                  <ReviewCommentsSection reviewId={reviewId} serviceId={serviceId} />
+                </div>
               </div>
-            </div>
-          ))
+            )
+          })
         )}
       </div>
     </div>
