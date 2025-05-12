@@ -14,11 +14,44 @@ export async function submitVote(
     const cookieStore = cookies()
     const supabase = createServerClient(cookieStore)
 
-    // Check if user is authenticated
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
+    // Extract the auth token from the form data
+    const authToken = formData.get("authToken") as string
 
+    // Check if user is authenticated - first try with cookies, then with the provided token
+    let session = null
+
+    // First try with cookies (for SSR/server components)
+    const { data: cookieSession } = await supabase.auth.getSession()
+
+    // If no session from cookies and we have an auth token, try to use it
+    if (!cookieSession.session && authToken) {
+      try {
+        // Verify the token and get the session
+        const { data: tokenData, error: tokenError } = await supabase.auth.getSession()
+
+        if (tokenError) {
+          console.error("Error verifying auth token:", tokenError)
+          return {
+            success: false,
+            message: "Authentication failed. Please sign in again.",
+            requireAuth: true,
+          }
+        }
+
+        session = tokenData.session
+      } catch (error) {
+        console.error("Error processing auth token:", error)
+        return {
+          success: false,
+          message: "Authentication failed. Please sign in again.",
+          requireAuth: true,
+        }
+      }
+    } else {
+      session = cookieSession.session
+    }
+
+    // If still no valid session, require authentication
     if (!session) {
       return {
         success: false,
