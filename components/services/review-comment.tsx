@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import type { ReviewComment as ReviewCommentType } from "@/types/reviews"
 import { useReviews } from "@/contexts/reviews-context"
+import { safeInitials, safeFormatDate, safeString, safeNumber } from "@/lib/data-safety-utils"
 
 interface ReviewCommentProps {
   comment: ReviewCommentType
@@ -25,37 +26,7 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
 
   // Format date - with error handling
   const formatDate = (dateString: string | null | undefined) => {
-    if (!dateString) return "recently"
-
-    try {
-      return formatDistanceToNow(new Date(dateString), { addSuffix: true })
-    } catch (error) {
-      console.error("Error formatting date:", error)
-      return "recently"
-    }
-  }
-
-  // Get initials for avatar fallback - with comprehensive error handling
-  const getInitials = (name: any): string => {
-    // If name is not provided or not a string, return default
-    if (!name || typeof name !== "string" || name.trim() === "") {
-      return "AN"
-    }
-
-    try {
-      // Split the name and get initials
-      const parts = name.trim().split(/\s+/)
-      if (parts.length === 0) return "AN"
-
-      if (parts.length === 1) {
-        return (parts[0].charAt(0) || "A").toUpperCase()
-      }
-
-      return ((parts[0].charAt(0) || "A") + (parts[parts.length - 1].charAt(0) || "N")).toUpperCase()
-    } catch (error) {
-      console.error("Error getting initials:", error, "for name:", name)
-      return "AN"
-    }
+    return safeFormatDate(dateString, (date) => formatDistanceToNow(date, { addSuffix: true }))
   }
 
   // Handle reply submission
@@ -66,10 +37,10 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
     setIsSubmitting(true)
     try {
       const formData = new FormData()
-      formData.append("parentCommentId", String(comment.id || 0))
+      formData.append("parentCommentId", String(safeNumber(comment?.id, 0)))
       formData.append("content", replyContent)
-      formData.append("serviceId", String(serviceId || 0))
-      formData.append("nestingLevel", String(comment.nesting_level || 1))
+      formData.append("serviceId", String(safeNumber(serviceId, 0)))
+      formData.append("nestingLevel", String(safeNumber(comment?.nesting_level, 1)))
 
       const result = await submitReply(formData)
 
@@ -87,26 +58,26 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
   // Handle reaction
   const handleReaction = async (reactionType: "like" | "dislike") => {
     if (!currentUser) return
-    await reactToComment(comment.id, reactionType)
+    await reactToComment(safeNumber(comment?.id, 0), reactionType)
   }
 
   // Safely access comment properties with fallbacks
-  const authorName = comment?.author_name || "Anonymous"
-  const authorAvatar = comment?.author_avatar || "/placeholder.svg"
-  const content = comment?.content || ""
-  const likes = comment?.likes || 0
-  const dislikes = comment?.dislikes || 0
-  const nestingLevel = comment?.nesting_level || 1
-  const createdAt = comment?.created_at || new Date().toISOString()
+  const authorName = safeString(comment?.author_name, "Anonymous")
+  const authorAvatar = safeString(comment?.author_avatar, "/placeholder.svg")
+  const content = safeString(comment?.content, "")
+  const likes = safeNumber(comment?.likes, 0)
+  const dislikes = safeNumber(comment?.dislikes, 0)
+  const nestingLevel = safeNumber(comment?.nesting_level, 1)
+  const createdAt = safeString(comment?.created_at, new Date().toISOString())
   const userReaction = comment?.user_reaction || null
-  const replies = comment?.replies || []
+  const replies = Array.isArray(comment?.replies) ? comment.replies : []
 
   return (
     <div className="space-y-3">
       <div className="flex items-start gap-2">
         <Avatar className="h-7 w-7 border shadow-sm">
           <AvatarImage src={authorAvatar || "/placeholder.svg"} alt={authorName} />
-          <AvatarFallback className="bg-primary/10 text-primary text-xs">{getInitials(authorName)}</AvatarFallback>
+          <AvatarFallback className="bg-primary/10 text-primary text-xs">{safeInitials(authorName)}</AvatarFallback>
         </Avatar>
 
         <div className="flex-1 space-y-1">
@@ -193,7 +164,7 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
       {replies.length > 0 && (
         <div className="pl-6 space-y-3 border-l-2 border-muted ml-3">
           {replies.map((reply) => (
-            <ReviewComment key={reply.id} comment={reply} serviceId={serviceId} />
+            <ReviewComment key={safeNumber(reply?.id, 0)} comment={reply} serviceId={serviceId} />
           ))}
         </div>
       )}

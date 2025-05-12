@@ -3,7 +3,8 @@
 import type React from "react"
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react"
 import { supabase } from "@/lib/supabase"
-import type { ServiceReview, ReviewComment } from "@/types/reviews"
+import type { ServiceReview, ReviewComment, SafeReviewComment, SafeServiceReview } from "@/types/reviews"
+import { safeString, safeNumber, safeGet } from "@/lib/data-safety-utils"
 
 // Safely get user from session
 async function getCurrentUser() {
@@ -47,6 +48,55 @@ function getDisplayNameFromData(user: any, userProfile: any): string {
   } catch (error) {
     console.error("Error getting display name:", error)
     return "Anonymous"
+  }
+}
+
+// Safely process review data to ensure all required fields exist
+function processSafeReview(review: any): SafeServiceReview {
+  if (!review || typeof review !== "object") {
+    return { id: 0, service_id: 0 }
+  }
+
+  return {
+    id: safeNumber(review.id, 0),
+    service_id: safeNumber(review.service_id, 0),
+    user_id: safeString(review.user_id, ""),
+    author_name: safeString(review.author_name, "Anonymous"),
+    author_avatar: safeString(review.author_avatar, "/placeholder.svg"),
+    rating: safeNumber(review.rating, 0),
+    title: safeString(review.title, "Review"),
+    content: safeString(review.content, ""),
+    interface_rating: review.interface_rating !== null ? safeNumber(review.interface_rating, 0) : null,
+    reliability_rating: review.reliability_rating !== null ? safeNumber(review.reliability_rating, 0) : null,
+    content_rating: review.content_rating !== null ? safeNumber(review.content_rating, 0) : null,
+    value_rating: review.value_rating !== null ? safeNumber(review.value_rating, 0) : null,
+    likes: safeNumber(review.likes, 0),
+    dislikes: safeNumber(review.dislikes, 0),
+    created_at: safeString(review.created_at, new Date().toISOString()),
+  }
+}
+
+// Safely process comment data to ensure all required fields exist
+function processSafeComment(comment: any, userReaction: string | null = null): SafeReviewComment {
+  if (!comment || typeof comment !== "object") {
+    return { id: 0 }
+  }
+
+  return {
+    id: safeNumber(comment.id, 0),
+    review_id: comment.review_id !== null ? safeNumber(comment.review_id, 0) : null,
+    parent_comment_id: comment.parent_comment_id !== null ? safeNumber(comment.parent_comment_id, 0) : null,
+    user_id: safeString(comment.user_id, ""),
+    author_name: safeString(comment.author_name, "Anonymous"),
+    author_avatar: safeString(comment.author_avatar, "/placeholder.svg"),
+    content: safeString(comment.content, ""),
+    likes: safeNumber(comment.likes, 0),
+    dislikes: safeNumber(comment.dislikes, 0),
+    created_at: safeString(comment.created_at, new Date().toISOString()),
+    updated_at: comment.updated_at ? safeString(comment.updated_at) : null,
+    nesting_level: safeNumber(comment.nesting_level, 1),
+    replies: Array.isArray(comment.replies) ? comment.replies : [],
+    user_reaction: userReaction,
   }
 }
 
@@ -136,19 +186,9 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           console.error("Error fetching reviews:", error)
           setReviews([])
         } else {
-          // Ensure all reviews have required properties
-          const safeReviews = (data || []).map((review) => ({
-            ...review,
-            author_name: review.author_name || "Anonymous",
-            content: review.content || "",
-            title: review.title || "Review",
-            rating: review.rating || 0,
-            likes: review.likes || 0,
-            dislikes: review.dislikes || 0,
-            created_at: review.created_at || new Date().toISOString(),
-          }))
-
-          setReviews(safeReviews)
+          // Process reviews to ensure all required fields exist
+          const safeReviews = (data || []).map((review) => processSafeReview(review))
+          setReviews(safeReviews as ServiceReview[])
 
           // If user is logged in, fetch their reactions to these reviews
           if (currentUser) {
@@ -166,7 +206,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
                   const newUserReactions: Record<string, string> = {}
                   reactions.forEach((reaction) => {
                     if (reaction && reaction.review_id) {
-                      newUserReactions[`review_${reaction.review_id}`] = reaction.reaction_type
+                      newUserReactions[`review_${reaction.review_id}`] = safeString(reaction.reaction_type, "like")
                     }
                   })
                   setUserReactions((prev) => ({
@@ -249,7 +289,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
             if (!reactionsError && reactions) {
               reactions.forEach((reaction) => {
                 if (reaction && reaction.comment_id) {
-                  userReactionsMap[`comment_${reaction.comment_id}`] = reaction.reaction_type
+                  userReactionsMap[`comment_${reaction.comment_id}`] = safeString(reaction.reaction_type, "like")
                 }
               })
 
@@ -270,46 +310,26 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         // Process top-level comments
         const processedTopComments =
           topLevelComments?.map((comment) => {
-            // Ensure all required properties exist
-            const safeComment = {
-              ...comment,
-              author_name: comment.author_name || "Anonymous",
-              content: comment.content || "",
-              likes: comment.likes || 0,
-              dislikes: comment.dislikes || 0,
-              nesting_level: comment.nesting_level || 1,
-              created_at: comment.created_at || new Date().toISOString(),
-              replies: [],
-              user_reaction: userReactionsMap[`comment_${comment.id}`] || null,
-            }
-            commentMap.set(comment.id, safeComment)
-            return safeComment
+            const userReaction = userReactionsMap[`comment_${comment.id}`] || null
+            const processedComment = processSafeComment(comment, userReaction) as ReviewComment
+            commentMap.set(comment.id, processedComment)
+            return processedComment
           }) || []
 
         // Process replies and build the tree
         allReplies?.forEach((reply) => {
           if (!reply || !reply.id || !reply.parent_comment_id) return
 
-          // Ensure all required properties exist
-          const safeReply = {
-            ...reply,
-            author_name: reply.author_name || "Anonymous",
-            content: reply.content || "",
-            likes: reply.likes || 0,
-            dislikes: reply.dislikes || 0,
-            nesting_level: reply.nesting_level || 2,
-            created_at: reply.created_at || new Date().toISOString(),
-            replies: [],
-            user_reaction: userReactionsMap[`comment_${reply.id}`] || null,
-          }
+          const userReaction = userReactionsMap[`comment_${reply.id}`] || null
+          const processedReply = processSafeComment(reply, userReaction) as ReviewComment
 
-          commentMap.set(reply.id, safeReply)
+          commentMap.set(reply.id, processedReply)
 
           // Add this reply to its parent's replies array
           if (reply.parent_comment_id && commentMap.has(reply.parent_comment_id)) {
             const parent = commentMap.get(reply.parent_comment_id)
             if (parent && parent.replies) {
-              parent.replies.push(safeReply)
+              parent.replies.push(processedReply)
             }
           }
         })
@@ -339,21 +359,26 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         return { success: false, error: "You must be logged in to submit a review" }
       }
 
-      const serviceId = Number.parseInt(formData.get("serviceId") as string)
-      const rating = Number.parseFloat(formData.get("rating") as string)
-      const title = formData.get("title") as string
-      const content = formData.get("content") as string
-      const interfaceRating = Number.parseFloat((formData.get("interfaceRating") as string) || "0")
-      const reliabilityRating = Number.parseFloat((formData.get("reliabilityRating") as string) || "0")
-      const contentRating = Number.parseFloat((formData.get("contentRating") as string) || "0")
-      const valueRating = Number.parseFloat((formData.get("valueRating") as string) || "0")
+      const serviceId = safeNumber(formData.get("serviceId"), 0)
+      const rating = safeNumber(formData.get("rating"), 0)
+      const title = safeString(formData.get("title"), "")
+      const content = safeString(formData.get("content"), "")
+      const interfaceRating = safeNumber(formData.get("interfaceRating"), 0)
+      const reliabilityRating = safeNumber(formData.get("reliabilityRating"), 0)
+      const contentRating = safeNumber(formData.get("contentRating"), 0)
+      const valueRating = safeNumber(formData.get("valueRating"), 0)
+
+      if (serviceId === 0 || rating === 0 || !title.trim() || !content.trim()) {
+        return { success: false, error: "Missing required fields" }
+      }
 
       try {
         // Get display name from user_profiles or metadata
         const authorName = getDisplayNameFromData(currentUser, userProfile)
 
         // Get avatar URL from user_profiles or metadata
-        const authorAvatar = userProfile?.avatar_url || currentUser.user_metadata?.avatar_url || null
+        const authorAvatar =
+          safeGet(userProfile, "avatar_url", null) || safeGet(currentUser, "user_metadata.avatar_url", null)
 
         const { data, error } = await supabase
           .from("service_reviews")
@@ -365,10 +390,10 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
             rating,
             title,
             content,
-            interface_rating: interfaceRating || null,
-            reliability_rating: reliabilityRating || null,
-            content_rating: contentRating || null,
-            value_rating: valueRating || null,
+            interface_rating: interfaceRating > 0 ? interfaceRating : null,
+            reliability_rating: reliabilityRating > 0 ? reliabilityRating : null,
+            content_rating: contentRating > 0 ? contentRating : null,
+            value_rating: valueRating > 0 ? valueRating : null,
             likes: 0,
             dislikes: 0,
           })
@@ -381,7 +406,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
         // Update reviews state with the new review
         if (data && data[0]) {
-          setReviews((prev) => [data[0], ...prev])
+          const safeReview = processSafeReview(data[0])
+          setReviews((prev) => [safeReview as ServiceReview, ...prev])
         }
 
         return { success: true }
@@ -400,15 +426,20 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         return { success: false, error: "You must be logged in to comment" }
       }
 
-      const reviewId = Number.parseInt(formData.get("reviewId") as string)
-      const content = formData.get("content") as string
+      const reviewId = safeNumber(formData.get("reviewId"), 0)
+      const content = safeString(formData.get("content"), "")
+
+      if (reviewId === 0 || !content.trim()) {
+        return { success: false, error: "Missing required fields" }
+      }
 
       try {
         // Get display name from user_profiles or metadata
         const authorName = getDisplayNameFromData(currentUser, userProfile)
 
         // Get avatar URL from user_profiles or metadata
-        const authorAvatar = userProfile?.avatar_url || currentUser.user_metadata?.avatar_url || null
+        const authorAvatar =
+          safeGet(userProfile, "avatar_url", null) || safeGet(currentUser, "user_metadata.avatar_url", null)
 
         const { data, error } = await supabase
           .from("review_comments")
@@ -432,11 +463,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
         // Update comments state with the new comment
         if (data && data[0]) {
-          const newComment = {
-            ...data[0],
-            replies: [],
-            user_reaction: null,
-          }
+          const newComment = processSafeComment(data[0], null) as ReviewComment
 
           setComments((prev) => {
             const existingComments = prev[reviewId] || []
@@ -463,9 +490,13 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         return { success: false, error: "You must be logged in to reply" }
       }
 
-      const parentCommentId = Number.parseInt(formData.get("parentCommentId") as string)
-      const content = formData.get("content") as string
-      const nestingLevel = Number.parseInt(formData.get("nestingLevel") as string) + 1
+      const parentCommentId = safeNumber(formData.get("parentCommentId"), 0)
+      const content = safeString(formData.get("content"), "")
+      const nestingLevel = safeNumber(formData.get("nestingLevel"), 1) + 1
+
+      if (parentCommentId === 0 || !content.trim()) {
+        return { success: false, error: "Missing required fields" }
+      }
 
       // Check if we've reached maximum nesting level
       if (nestingLevel > 3) {
@@ -477,7 +508,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         const authorName = getDisplayNameFromData(currentUser, userProfile)
 
         // Get avatar URL from user_profiles or metadata
-        const authorAvatar = userProfile?.avatar_url || currentUser.user_metadata?.avatar_url || null
+        const authorAvatar =
+          safeGet(userProfile, "avatar_url", null) || safeGet(currentUser, "user_metadata.avatar_url", null)
 
         const { data, error } = await supabase
           .from("review_comments")
@@ -505,7 +537,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           const findParentComment = (commentList: ReviewComment[]): boolean => {
             for (const comment of commentList) {
               if (comment.id === parentCommentId) {
-                reviewId = Number.parseInt(revId)
+                reviewId = safeNumber(revId, 0)
                 return true
               }
               if (comment.replies && comment.replies.length > 0) {
@@ -524,11 +556,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
         if (reviewId && data && data[0]) {
           // Update the comments state by adding the reply to the parent comment
-          const newReply = {
-            ...data[0],
-            replies: [],
-            user_reaction: null,
-          }
+          const newReply = processSafeComment(data[0], null) as ReviewComment
 
           setComments((prev) => {
             const updateReplies = (commentList: ReviewComment[]): ReviewComment[] => {
@@ -584,8 +612,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         setReviews((prev) =>
           prev.map((review) => {
             if (review.id === reviewId) {
-              let likes = review.likes || 0
-              let dislikes = review.dislikes || 0
+              let likes = safeNumber(review.likes, 0)
+              let dislikes = safeNumber(review.dislikes, 0)
 
               // Remove previous reaction if exists
               if (currentReaction === "like") likes = Math.max(0, likes - 1)
@@ -644,8 +672,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           .single()
 
         if (review) {
-          let likes = review.likes || 0
-          let dislikes = review.dislikes || 0
+          let likes = safeNumber(review.likes, 0)
+          let dislikes = safeNumber(review.dislikes, 0)
 
           // Remove previous reaction if exists
           if (currentReaction === "like") likes = Math.max(0, likes - 1)
@@ -694,8 +722,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           const updateCommentReaction = (commentList: ReviewComment[]): ReviewComment[] => {
             return commentList.map((comment) => {
               if (comment.id === commentId) {
-                let likes = comment.likes || 0
-                let dislikes = comment.dislikes || 0
+                let likes = safeNumber(comment.likes, 0)
+                let dislikes = safeNumber(comment.dislikes, 0)
 
                 // Remove previous reaction if exists
                 if (currentReaction === "like") likes = Math.max(0, likes - 1)
@@ -711,7 +739,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
                   ...comment,
                   likes,
                   dislikes,
-                  user_reaction: isRemovingReaction ? null : reactionType,
+                  user_reaction: isRemovingReaction ? null : (reactionType as "like" | "dislike" | null),
                 }
               }
               if (comment.replies && comment.replies.length > 0) {
@@ -768,8 +796,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           .single()
 
         if (comment) {
-          let likes = comment.likes || 0
-          let dislikes = comment.dislikes || 0
+          let likes = safeNumber(comment.likes, 0)
+          let dislikes = safeNumber(comment.dislikes, 0)
 
           // Remove previous reaction if exists
           if (currentReaction === "like") likes = Math.max(0, likes - 1)

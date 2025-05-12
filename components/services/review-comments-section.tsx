@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { ReviewComment } from "./review-comment"
 import { useReviews } from "@/contexts/reviews-context"
-import { getUserDisplayName } from "@/lib/auth-utils"
+import { safeInitials, safeNumber } from "@/lib/data-safety-utils"
 
 interface ReviewCommentsSectionProps {
   reviewId: number
@@ -16,112 +16,106 @@ interface ReviewCommentsSectionProps {
 }
 
 export function ReviewCommentsSection({ reviewId, serviceId }: ReviewCommentsSectionProps) {
-  const { comments, currentUser, fetchComments, submitComment } = useReviews()
+  const { comments, currentUser, userProfile, fetchComments, submitComment } = useReviews()
   const [commentContent, setCommentContent] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [userDisplayName, setUserDisplayName] = useState<string>("Anonymous")
-  const [hasFetchedComments, setHasFetchedComments] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
 
   // Fetch comments for this review
   useEffect(() => {
-    if (!hasFetchedComments) {
-      fetchComments(reviewId).then(() => {
-        setHasFetchedComments(true)
-      })
+    const loadComments = async () => {
+      setIsLoading(true)
+      try {
+        await fetchComments(reviewId)
+      } catch (error) {
+        console.error("Error fetching comments:", error)
+      } finally {
+        setIsLoading(false)
+      }
     }
-  }, [reviewId, fetchComments, hasFetchedComments])
 
-  // Update user display name when currentUser changes
-  useEffect(() => {
-    if (currentUser) {
-      setUserDisplayName(getUserDisplayName(currentUser))
-    }
-  }, [currentUser])
-
-  // Get comments for this review
-  const reviewComments = comments[reviewId] || []
+    loadComments()
+  }, [reviewId, fetchComments])
 
   // Handle comment submission
   const handleCommentSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-
-    if (!currentUser) {
-      setError("You must be logged in to comment")
-      return
-    }
-
-    if (!commentContent.trim()) {
-      setError("Comment cannot be empty")
-      return
-    }
+    if (!commentContent.trim() || !currentUser) return
 
     setIsSubmitting(true)
-    setError(null)
+    try {
+      const formData = new FormData()
+      formData.append("reviewId", String(reviewId))
+      formData.append("content", commentContent)
+      formData.append("serviceId", String(serviceId))
 
-    const formData = new FormData()
-    formData.append("reviewId", reviewId.toString())
-    formData.append("content", commentContent)
-    formData.append("serviceId", serviceId.toString())
+      const result = await submitComment(formData)
 
-    const result = await submitComment(formData)
-
-    setIsSubmitting(false)
-
-    if (!result.success) {
-      setError(result.error)
-      return
+      if (result.success) {
+        setCommentContent("")
+      }
+    } catch (error) {
+      console.error("Error submitting comment:", error)
+    } finally {
+      setIsSubmitting(false)
     }
-
-    // Reset form
-    setCommentContent("")
   }
 
-  // Get initials for avatar fallback
-  const getInitials = (name: string) => {
-    return name
-      .split(" ")
-      .map((part) => part[0])
-      .join("")
-      .toUpperCase()
-      .substring(0, 2)
-  }
+  // Get the comments for this review
+  const reviewComments = comments[reviewId] || []
+
+  // Get user display name and avatar
+  const userDisplayName =
+    userProfile?.display_name ||
+    currentUser?.user_metadata?.full_name ||
+    currentUser?.user_metadata?.name ||
+    "Anonymous"
+  const userAvatar = userProfile?.avatar_url || currentUser?.user_metadata?.avatar_url || "/placeholder.svg"
 
   return (
-    <div className="space-y-6">
-      {currentUser ? (
+    <div className="space-y-4">
+      {currentUser && (
         <form onSubmit={handleCommentSubmit} className="flex gap-3">
-          <Avatar className="h-8 w-8 flex-shrink-0">
-            <AvatarImage src={currentUser?.user_metadata?.avatar_url || "/placeholder.svg"} alt={userDisplayName} />
+          <Avatar className="h-8 w-8 border shadow-sm flex-shrink-0">
+            <AvatarImage src={userAvatar || "/placeholder.svg"} alt={userDisplayName} />
             <AvatarFallback className="bg-primary/10 text-primary text-xs">
-              {getInitials(userDisplayName)}
+              {safeInitials(userDisplayName)}
             </AvatarFallback>
           </Avatar>
           <div className="flex-1 space-y-2">
             <Textarea
-              placeholder="Write a comment..."
               value={commentContent}
               onChange={(e) => setCommentContent(e.target.value)}
-              className="min-h-[80px] bg-background resize-none"
+              placeholder="Write a comment..."
+              className="min-h-[60px] resize-none text-sm rounded-xl py-2 bg-muted/30"
+              disabled={isSubmitting}
             />
-            <div className="flex justify-between items-center">
-              {error && <p className="text-xs text-destructive">{error}</p>}
-              <Button type="submit" size="sm" disabled={isSubmitting || !commentContent.trim()} className="ml-auto">
-                {isSubmitting ? "Posting..." : "Post"}
+            <div className="flex justify-end">
+              <Button
+                type="submit"
+                size="sm"
+                className="h-8 text-xs bg-primary hover:bg-primary/90"
+                disabled={isSubmitting || !commentContent.trim()}
+              >
+                {isSubmitting ? "Posting..." : "Post Comment"}
               </Button>
             </div>
           </div>
         </form>
-      ) : (
-        <p className="text-sm text-muted-foreground">Sign in to join the conversation</p>
       )}
 
-      {hasFetchedComments && reviewComments.length === 0 ? (
-        <p className="text-sm text-muted-foreground text-center py-4">No comments yet. Be the first to comment!</p>
+      {isLoading ? (
+        <div className="text-center py-4">
+          <p className="text-sm text-muted-foreground">Loading comments...</p>
+        </div>
+      ) : reviewComments.length === 0 ? (
+        <div className="text-center py-4">
+          <p className="text-sm text-muted-foreground">No comments yet. Be the first to comment!</p>
+        </div>
       ) : (
         <div className="space-y-4">
           {reviewComments.map((comment) => (
-            <ReviewComment key={comment.id} comment={comment} serviceId={serviceId} nestingLevel={1} />
+            <ReviewComment key={safeNumber(comment?.id, 0)} comment={comment} serviceId={serviceId} />
           ))}
         </div>
       )}

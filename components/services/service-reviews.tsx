@@ -15,6 +15,7 @@ import { ReviewCommentsSection } from "./review-comments-section"
 import { AuthButton } from "@/components/auth/auth-button"
 import { cn } from "@/lib/utils"
 import { ReviewsProvider, useReviews } from "@/contexts/reviews-context"
+import { safeInitials, safeFormatDate, safeString, safeNumber, safeGet } from "@/lib/data-safety-utils"
 
 interface ServiceReviewsProps {
   serviceId: number
@@ -72,13 +73,13 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
       try {
         // Safely extract display name
         const displayName =
-          userProfile?.display_name ||
-          currentUser.user_metadata?.full_name ||
-          currentUser.user_metadata?.name ||
-          (currentUser.email && typeof currentUser.email === "string" ? currentUser.email.split("@")[0] : null) ||
+          safeGet(userProfile, "display_name", null) ||
+          safeGet(currentUser, "user_metadata.full_name", null) ||
+          safeGet(currentUser, "user_metadata.name", null) ||
+          (safeString(currentUser.email) ? safeString(currentUser.email).split("@")[0] : null) ||
           "Anonymous"
 
-        setUserDisplayName(displayName)
+        setUserDisplayName(safeString(displayName, "Anonymous"))
       } catch (error) {
         console.error("Error setting user display name:", error)
         setUserDisplayName("Anonymous")
@@ -87,12 +88,15 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
   }, [currentUser, userProfile])
 
   // Filter reviews based on selected filter
-  const filteredReviews = reviews.filter((review) => {
+  const filteredReviews = (Array.isArray(reviews) ? reviews : []).filter((review) => {
     if (!review || typeof review !== "object") return false
+
+    const reviewRating = safeNumber(review.rating, 0)
+
     if (reviewFilter === "all") return true
-    if (reviewFilter === "positive") return (review.rating || 0) >= 4
-    if (reviewFilter === "neutral") return (review.rating || 0) === 3
-    if (reviewFilter === "negative") return (review.rating || 0) <= 2
+    if (reviewFilter === "positive") return reviewRating >= 4
+    if (reviewFilter === "neutral") return reviewRating === 3
+    if (reviewFilter === "negative") return reviewRating <= 2
     return true
   })
 
@@ -171,39 +175,9 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
     await reactToReview(reviewId, reactionType)
   }
 
-  // Get initials for avatar fallback - with comprehensive error handling
-  const getInitials = (name: any): string => {
-    // If name is not provided or not a string, return default
-    if (!name || typeof name !== "string" || name.trim() === "") {
-      return "AN"
-    }
-
-    try {
-      // Split the name and get initials
-      const parts = name.trim().split(/\s+/)
-      if (parts.length === 0) return "AN"
-
-      if (parts.length === 1) {
-        return (parts[0].charAt(0) || "A").toUpperCase()
-      }
-
-      return ((parts[0].charAt(0) || "A") + (parts[parts.length - 1].charAt(0) || "N")).toUpperCase()
-    } catch (error) {
-      console.error("Error getting initials:", error, "for name:", name)
-      return "AN"
-    }
-  }
-
   // Format date - with error handling
   const formatDate = (dateString: string | null | undefined) => {
-    if (!dateString) return "recently"
-
-    try {
-      return formatDistanceToNow(new Date(dateString), { addSuffix: true })
-    } catch (error) {
-      console.error("Error formatting date:", error)
-      return "recently"
-    }
+    return safeFormatDate(dateString, (date) => formatDistanceToNow(date, { addSuffix: true }))
   }
 
   // Add this function to check if the user has reacted to a review
@@ -259,11 +233,11 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
               <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
                 <Avatar className="h-6 w-6 border shadow-sm">
                   <AvatarImage
-                    src={currentUser?.user_metadata?.avatar_url || "/placeholder.svg"}
+                    src={safeGet(currentUser, "user_metadata.avatar_url", "/placeholder.svg") || "/placeholder.svg"}
                     alt={userDisplayName}
                   />
                   <AvatarFallback className="bg-primary/10 text-primary text-xs">
-                    {getInitials(userDisplayName)}
+                    {safeInitials(userDisplayName)}
                   </AvatarFallback>
                 </Avatar>
                 <span>
@@ -458,18 +432,18 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
         ) : (
           filteredReviews.map((review) => {
             // Safely access review properties with fallbacks
-            const reviewId = review?.id || 0
-            const authorName = review?.author_name || "Anonymous"
-            const authorAvatar = review?.author_avatar || "/placeholder.svg"
-            const reviewTitle = review?.title || "Review"
-            const reviewContent = review?.content || ""
-            const reviewRating = review?.rating || 0
-            const likes = review?.likes || 0
-            const createdAt = review?.created_at || new Date().toISOString()
-            const interfaceRating = review?.interface_rating
-            const reliabilityRating = review?.reliability_rating
-            const contentRating = review?.content_rating
-            const valueRating = review?.value_rating
+            const reviewId = safeNumber(review?.id, 0)
+            const authorName = safeString(review?.author_name, "Anonymous")
+            const authorAvatar = safeString(review?.author_avatar, "/placeholder.svg")
+            const reviewTitle = safeString(review?.title, "Review")
+            const reviewContent = safeString(review?.content, "")
+            const reviewRating = safeNumber(review?.rating, 0)
+            const likes = safeNumber(review?.likes, 0)
+            const createdAt = safeString(review?.created_at, new Date().toISOString())
+            const interfaceRating = safeNumber(review?.interface_rating, 0)
+            const reliabilityRating = safeNumber(review?.reliability_rating, 0)
+            const contentRating = safeNumber(review?.content_rating, 0)
+            const valueRating = safeNumber(review?.value_rating, 0)
 
             return (
               <div
@@ -480,7 +454,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
                   <div className="flex items-start gap-3">
                     <Avatar className="h-10 w-10 border shadow-sm">
                       <AvatarImage src={authorAvatar || "/placeholder.svg"} alt={authorName} />
-                      <AvatarFallback className="bg-primary/10 text-primary">{getInitials(authorName)}</AvatarFallback>
+                      <AvatarFallback className="bg-primary/10 text-primary">{safeInitials(authorName)}</AvatarFallback>
                     </Avatar>
 
                     <div className="flex-1">
@@ -542,9 +516,9 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
                       </div>
 
                       {/* Detailed ratings if available */}
-                      {(interfaceRating || reliabilityRating || contentRating || valueRating) && (
+                      {(interfaceRating > 0 || reliabilityRating > 0 || contentRating > 0 || valueRating > 0) && (
                         <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-xs p-3 bg-muted/30 rounded-lg">
-                          {interfaceRating && (
+                          {interfaceRating > 0 && (
                             <div className="flex items-center justify-between">
                               <span className="text-muted-foreground">Interface:</span>
                               <div className="flex">
@@ -562,7 +536,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
                             </div>
                           )}
 
-                          {reliabilityRating && (
+                          {reliabilityRating > 0 && (
                             <div className="flex items-center justify-between">
                               <span className="text-muted-foreground">Reliability:</span>
                               <div className="flex">
@@ -582,7 +556,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
                             </div>
                           )}
 
-                          {contentRating && (
+                          {contentRating > 0 && (
                             <div className="flex items-center justify-between">
                               <span className="text-muted-foreground">Content:</span>
                               <div className="flex">
@@ -600,7 +574,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
                             </div>
                           )}
 
-                          {valueRating && (
+                          {valueRating > 0 && (
                             <div className="flex items-center justify-between">
                               <span className="text-muted-foreground">Value:</span>
                               <div className="flex">
