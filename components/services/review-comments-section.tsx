@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -10,6 +10,7 @@ import { ReviewComment } from "./review-comment"
 import { useReviews } from "@/contexts/reviews-context"
 import { safeInitials, safeNumber } from "@/lib/data-safety-utils"
 import { CommentSkeletonList } from "./comment-skeleton"
+import { useTransitionState } from "@/hooks/use-transition-state"
 
 interface ReviewCommentsSectionProps {
   reviewId: number
@@ -21,6 +22,13 @@ export function ReviewCommentsSection({ reviewId, serviceId }: ReviewCommentsSec
   const [commentContent, setCommentContent] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  const [isAddingComment, setIsAddingComment] = useState(false)
+
+  // Get the comments for this review
+  const reviewComments = comments[reviewId] || []
+
+  // Use transition state to prevent flashing when comments are updated
+  const transitionComments = useTransitionState(reviewComments)
 
   // Fetch comments for this review
   useEffect(() => {
@@ -31,7 +39,8 @@ export function ReviewCommentsSection({ reviewId, serviceId }: ReviewCommentsSec
       } catch (error) {
         console.error("Error fetching comments:", error)
       } finally {
-        setIsLoading(false)
+        // Add a small delay to make the transition smoother
+        setTimeout(() => setIsLoading(false), 300)
       }
     }
 
@@ -39,39 +48,48 @@ export function ReviewCommentsSection({ reviewId, serviceId }: ReviewCommentsSec
   }, [reviewId, fetchComments])
 
   // Handle comment submission
-  const handleCommentSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!commentContent.trim() || !currentUser) return
+  const handleCommentSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault()
+      if (!commentContent.trim() || !currentUser) return
 
-    setIsSubmitting(true)
-    try {
-      const formData = new FormData()
-      formData.append("reviewId", String(reviewId))
-      formData.append("content", commentContent)
-      formData.append("serviceId", String(serviceId))
+      setIsSubmitting(true)
+      setIsAddingComment(true)
+      try {
+        const formData = new FormData()
+        formData.append("reviewId", String(reviewId))
+        formData.append("content", commentContent)
+        formData.append("serviceId", String(serviceId))
 
-      const result = await submitComment(formData)
+        const result = await submitComment(formData)
 
-      if (result.success) {
-        setCommentContent("")
+        if (result.success) {
+          setCommentContent("")
+        }
+      } catch (error) {
+        console.error("Error submitting comment:", error)
+      } finally {
+        setIsSubmitting(false)
+        // Add a small delay to make the transition smoother
+        setTimeout(() => setIsAddingComment(false), 500)
       }
-    } catch (error) {
-      console.error("Error submitting comment:", error)
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
-
-  // Get the comments for this review
-  const reviewComments = comments[reviewId] || []
+    },
+    [commentContent, currentUser, reviewId, serviceId, submitComment],
+  )
 
   // Get user display name and avatar
-  const userDisplayName =
-    userProfile?.display_name ||
-    currentUser?.user_metadata?.full_name ||
-    currentUser?.user_metadata?.name ||
-    "Anonymous"
-  const userAvatar = userProfile?.avatar_url || currentUser?.user_metadata?.avatar_url || "/placeholder.svg"
+  const userDisplayName = useMemo(() => {
+    return (
+      userProfile?.display_name ||
+      currentUser?.user_metadata?.full_name ||
+      currentUser?.user_metadata?.name ||
+      "Anonymous"
+    )
+  }, [userProfile, currentUser])
+
+  const userAvatar = useMemo(() => {
+    return userProfile?.avatar_url || currentUser?.user_metadata?.avatar_url || "/placeholder.svg"
+  }, [userProfile, currentUser])
 
   return (
     <div className="space-y-4">
@@ -107,13 +125,15 @@ export function ReviewCommentsSection({ reviewId, serviceId }: ReviewCommentsSec
 
       {isLoading ? (
         <CommentSkeletonList />
-      ) : reviewComments.length === 0 ? (
-        <div className="text-center py-4">
+      ) : transitionComments.length === 0 ? (
+        <div className="text-center py-4 animate-in fade-in-0 duration-300">
           <p className="text-sm text-muted-foreground">No comments yet. Be the first to comment!</p>
         </div>
       ) : (
-        <div className="space-y-4">
-          {reviewComments.map((comment) => (
+        <div
+          className={`space-y-4 ${isAddingComment ? "opacity-70 transition-opacity duration-300" : "transition-opacity duration-300"}`}
+        >
+          {transitionComments.map((comment) => (
             <ReviewComment key={safeNumber(comment?.id, 0)} comment={comment} serviceId={serviceId} />
           ))}
         </div>

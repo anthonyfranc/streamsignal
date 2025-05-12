@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react"
+import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { supabase } from "@/lib/supabase"
 import type { ServiceReview, ReviewComment, SafeReviewComment, SafeServiceReview } from "@/types/reviews"
 import { safeString, safeNumber, safeGet } from "@/lib/data-safety-utils"
@@ -135,6 +135,9 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
   const fetchedCommentsRef = useRef<Record<number, boolean>>({})
   const isFetchingUserProfile = useRef(false)
 
+  // Use refs to track pending updates to prevent race conditions
+  const pendingCommentsUpdates = useRef<Record<number, boolean>>({})
+
   // Check current user and fetch profile
   useEffect(() => {
     const checkUser = async () => {
@@ -179,7 +182,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       }
 
       setIsLoading(true)
-      setIsLoadingReview({ ...isLoadingReview, [serviceId]: true })
+      setIsLoadingReview((prev) => ({ ...prev, [serviceId]: true }))
       try {
         const { data, error } = await supabase
           .from("service_reviews")
@@ -193,6 +196,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         } else {
           // Process reviews to ensure all required fields exist
           const safeReviews = (data || []).map((review) => processSafeReview(review))
+
+          // Use functional update to prevent race conditions
           setReviews(safeReviews as ServiceReview[])
 
           // If user is logged in, fetch their reactions to these reviews
@@ -235,10 +240,10 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         setReviews([])
       } finally {
         setIsLoading(false)
-        setIsLoadingReview({ ...isLoadingReview, [serviceId]: false })
+        setIsLoadingReview((prev) => ({ ...prev, [serviceId]: false }))
       }
     },
-    [currentUser, isLoadingReview],
+    [currentUser],
   )
 
   // Reset fetched state when current user changes
@@ -255,7 +260,14 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         return comments[reviewId] || []
       }
 
-      setIsLoadingComments({ ...isLoadingComments, [reviewId]: true })
+      // Skip if there's a pending update for this review's comments
+      if (pendingCommentsUpdates.current[reviewId]) {
+        return comments[reviewId] || []
+      }
+
+      pendingCommentsUpdates.current[reviewId] = true
+      setIsLoadingComments((prev) => ({ ...prev, [reviewId]: true }))
+
       try {
         // Get all top-level comments for this review
         const { data: topLevelComments, error: commentsError } = await supabase
@@ -341,7 +353,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           }
         })
 
-        // Update comments state
+        // Update comments state using functional update to prevent race conditions
         setComments((prev) => ({
           ...prev,
           [reviewId]: processedTopComments,
@@ -355,10 +367,14 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         console.error("Error getting review comments:", error)
         return []
       } finally {
-        setIsLoadingComments({ ...isLoadingComments, [reviewId]: false })
+        setIsLoadingComments((prev) => ({ ...prev, [reviewId]: false }))
+        // Clear the pending update flag after a delay to prevent immediate re-fetching
+        setTimeout(() => {
+          pendingCommentsUpdates.current[reviewId] = false
+        }, 500)
       }
     },
-    [currentUser, comments, isLoadingComments],
+    [currentUser, comments],
   )
 
   // Submit a new review
@@ -416,6 +432,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         // Update reviews state with the new review
         if (data && data[0]) {
           const safeReview = processSafeReview(data[0])
+
+          // Use functional update to prevent race conditions
           setReviews((prev) => [safeReview as ServiceReview, ...prev])
         }
 
@@ -441,6 +459,9 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       if (reviewId === 0 || !content.trim()) {
         return { success: false, error: "Missing required fields" }
       }
+
+      // Mark this review's comments as having a pending update
+      pendingCommentsUpdates.current[reviewId] = true
 
       try {
         // Get display name from user_profiles or metadata
@@ -474,6 +495,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         if (data && data[0]) {
           const newComment = processSafeComment(data[0], null) as ReviewComment
 
+          // Use functional update to prevent race conditions
           setComments((prev) => {
             const existingComments = prev[reviewId] || []
             return {
@@ -487,6 +509,11 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         console.error("Error submitting comment:", error)
         return { success: false, error: "Failed to submit comment" }
+      } finally {
+        // Clear the pending update flag after a delay
+        setTimeout(() => {
+          pendingCommentsUpdates.current[reviewId] = false
+        }, 500)
       }
     },
     [currentUser, userProfile],
@@ -510,6 +537,34 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       // Check if we've reached maximum nesting level
       if (nestingLevel > 3) {
         return { success: false, error: "Maximum reply depth reached" }
+      }
+
+      // Find the review ID for this comment
+      let reviewId: number | null = null
+      for (const [revId, commentsList] of Object.entries(comments)) {
+        const findParentComment = (commentList: ReviewComment[]): boolean => {
+          for (const comment of commentList) {
+            if (comment.id === parentCommentId) {
+              reviewId = safeNumber(revId, 0)
+              return true
+            }
+            if (comment.replies && comment.replies.length > 0) {
+              if (findParentComment(comment.replies)) {
+                return true
+              }
+            }
+          }
+          return false
+        }
+
+        if (findParentComment(commentsList)) {
+          break
+        }
+      }
+
+      // Mark this review's comments as having a pending update
+      if (reviewId) {
+        pendingCommentsUpdates.current[reviewId] = true
       }
 
       try {
@@ -540,33 +595,11 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           return { success: false, error: error.message }
         }
 
-        // Find the review ID for this comment
-        let reviewId: number | null = null
-        for (const [revId, commentsList] of Object.entries(comments)) {
-          const findParentComment = (commentList: ReviewComment[]): boolean => {
-            for (const comment of commentList) {
-              if (comment.id === parentCommentId) {
-                reviewId = safeNumber(revId, 0)
-                return true
-              }
-              if (comment.replies && comment.replies.length > 0) {
-                if (findParentComment(comment.replies)) {
-                  return true
-                }
-              }
-            }
-            return false
-          }
-
-          if (findParentComment(commentsList)) {
-            break
-          }
-        }
-
         if (reviewId && data && data[0]) {
           // Update the comments state by adding the reply to the parent comment
           const newReply = processSafeComment(data[0], null) as ReviewComment
 
+          // Use functional update to prevent race conditions
           setComments((prev) => {
             const updateReplies = (commentList: ReviewComment[]): ReviewComment[] => {
               return commentList.map((comment) => {
@@ -597,6 +630,13 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         console.error("Error submitting reply:", error)
         return { success: false, error: "Failed to submit reply" }
+      } finally {
+        // Clear the pending update flag after a delay
+        if (reviewId) {
+          setTimeout(() => {
+            pendingCommentsUpdates.current[reviewId!] = false
+          }, 500)
+        }
       }
     },
     [currentUser, userProfile, comments],
@@ -618,6 +658,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           [`review_${reviewId}`]: isRemovingReaction ? null : reactionType,
         }))
 
+        // Use functional update to prevent race conditions
         setReviews((prev) =>
           prev.map((review) => {
             if (review.id === reviewId) {
@@ -726,7 +767,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           [`comment_${commentId}`]: isRemovingReaction ? null : reactionType,
         }))
 
-        // Update comments state
+        // Update comments state using functional update to prevent race conditions
         setComments((prev) => {
           const updateCommentReaction = (commentList: ReviewComment[]): ReviewComment[] => {
             return commentList.map((comment) => {
@@ -828,23 +869,43 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
     [currentUser, userReactions, comments],
   )
 
-  const value: ReviewsContextType = {
-    reviews,
-    comments,
-    isLoading,
-    isLoadingReview,
-    isLoadingComments,
-    currentUser,
-    userProfile,
-    userReactions,
-    fetchReviews,
-    fetchComments,
-    submitReview,
-    submitComment,
-    submitReply,
-    reactToReview,
-    reactToComment,
-  }
+  // Memoize the context value to prevent unnecessary re-renders
+  const value = useMemo(
+    () => ({
+      reviews,
+      comments,
+      isLoading,
+      isLoadingReview,
+      isLoadingComments,
+      currentUser,
+      userProfile,
+      userReactions,
+      fetchReviews,
+      fetchComments,
+      submitReview,
+      submitComment,
+      submitReply,
+      reactToReview,
+      reactToComment,
+    }),
+    [
+      reviews,
+      comments,
+      isLoading,
+      isLoadingReview,
+      isLoadingComments,
+      currentUser,
+      userProfile,
+      userReactions,
+      fetchReviews,
+      fetchComments,
+      submitReview,
+      submitComment,
+      submitReply,
+      reactToReview,
+      reactToComment,
+    ],
+  )
 
   return <ReviewsContext.Provider value={value}>{children}</ReviewsContext.Provider>
 }
