@@ -3,37 +3,64 @@ import { createServerClient } from "@supabase/ssr"
 import type { CookieOptions } from "@supabase/ssr"
 import type { Database } from "@/types/database"
 
-// Environment variable validation with fallbacks for client-side
+// Environment variable validation with better client-side handling
 const getEnvVariable = (key: string): string => {
   // For client-side, we need to check if the variable exists
   // and provide a fallback to prevent build errors
   if (typeof window !== "undefined") {
     // We're in the browser
-    // @ts-ignore - This is a special Next.js runtime variable
-    return (process.env[key] || "") as string
+    const value = process.env[key] as string
+
+    // Log the environment variable for debugging (redacted for security)
+    if (!value) {
+      console.error(`${key} is not available in client-side code`)
+    } else {
+      console.log(`${key} is available (value length: ${value.length})`)
+    }
+
+    return value || ""
   }
 
   // For server-side, we can be strict
   const value = process.env[key]
   if (!value) {
-    console.error(`${key} is required but not provided`)
-    // Return empty string instead of throwing to prevent build errors
+    console.error(`${key} is required but not provided on server-side`)
     return ""
   }
   return value
 }
 
-// Get Supabase URL and anon key
-export const supabaseUrl = getEnvVariable("NEXT_PUBLIC_SUPABASE_URL")
-export const supabaseAnonKey = getEnvVariable("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+// Get Supabase URL and anon key with better logging
+export const supabaseUrl = (() => {
+  const url = getEnvVariable("NEXT_PUBLIC_SUPABASE_URL")
+  if (!url && typeof window !== "undefined") {
+    console.error("NEXT_PUBLIC_SUPABASE_URL is missing in client-side code")
+  }
+  return url
+})()
 
-// Create a browser client (for client components)
+export const supabaseAnonKey = (() => {
+  const key = getEnvVariable("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+  if (!key && typeof window !== "undefined") {
+    console.error("NEXT_PUBLIC_SUPABASE_ANON_KEY is missing in client-side code")
+  }
+  return key
+})()
+
+// Create a browser client (for client components) with better error handling
 export const createBrowserClient = () => {
   // Check if we have the required environment variables
   if (!supabaseUrl || !supabaseAnonKey) {
-    console.error("Missing required Supabase environment variables")
+    console.error("Missing required Supabase environment variables in createBrowserClient")
+    console.log(
+      "Available env vars:",
+      Object.keys(process.env)
+        .filter((key) => key.startsWith("NEXT_PUBLIC_"))
+        .join(", "),
+    )
+
     // Return a dummy client that will fail gracefully
-    return createClient("https://example.com", "dummy-key", {
+    return createClient("https://placeholder-url.supabase.co", "placeholder-key", {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
