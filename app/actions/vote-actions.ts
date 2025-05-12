@@ -22,15 +22,19 @@ export async function submitVote(
 
     // First try with cookies (for SSR/server components)
     const { data: cookieSession } = await supabase.auth.getSession()
+    session = cookieSession.session
 
     // If no session from cookies and we have an auth token, try to use it
-    if (!cookieSession.session && authToken) {
+    if (!session && authToken) {
       try {
-        // Verify the token and get the session
-        const { data: tokenData, error: tokenError } = await supabase.auth.getSession()
+        // Try to set the session with the provided token
+        const { data, error } = await supabase.auth.setSession({
+          access_token: authToken,
+          refresh_token: "", // We don't have a refresh token from the client
+        })
 
-        if (tokenError) {
-          console.error("Error verifying auth token:", tokenError)
+        if (error) {
+          console.error("Error setting session with auth token:", error)
           return {
             success: false,
             message: "Authentication failed. Please sign in again.",
@@ -38,7 +42,7 @@ export async function submitVote(
           }
         }
 
-        session = tokenData.session
+        session = data.session
       } catch (error) {
         console.error("Error processing auth token:", error)
         return {
@@ -47,8 +51,6 @@ export async function submitVote(
           requireAuth: true,
         }
       }
-    } else {
-      session = cookieSession.session
     }
 
     // If still no valid session, require authentication
@@ -75,6 +77,7 @@ export async function submitVote(
       return { success: false, message: "Invalid vote type" }
     }
 
+    // Rest of the function remains the same...
     // Check if the user has already voted on this review/reply
     let existingVote
     let existingVoteError
@@ -234,7 +237,7 @@ export async function submitVote(
   }
 }
 
-// Helper function to update the vote count in a review
+// Helper functions remain the same...
 async function updateReviewVoteCount(supabase: any, reviewId: number) {
   try {
     // Count likes
@@ -305,7 +308,6 @@ async function updateReviewVoteCount(supabase: any, reviewId: number) {
   }
 }
 
-// Helper function to update the vote count in a reply
 async function updateReplyVoteCount(supabase: any, replyId: number) {
   try {
     // Count likes

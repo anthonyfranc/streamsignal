@@ -17,7 +17,8 @@ import type { Review, Reply } from "@/types/reviews"
 import { formatDistanceToNow } from "date-fns"
 import { AnimatePresence, motion } from "framer-motion"
 import { supabase } from "@/lib/supabase"
-import { getAuthToken } from "@/utils/auth-utils"
+// Import the new validation function
+import { getAuthToken, validateAuthentication } from "@/utils/auth-utils"
 
 // Add isVisible prop to the ReviewItem component
 interface ReviewItemProps {
@@ -98,6 +99,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
   const [optimisticReplyMap, setOptimisticReplyMap] = useState<Map<number, number>>(new Map())
   const [isVoting, setIsVoting] = useState(false)
   const [authToken, setAuthToken] = useState<string | null>(null)
+  const [isAuthenticating, setIsAuthenticating] = useState(false)
 
   // Track when the component is actually visible in the viewport
   const reviewItemRef = useRef<HTMLDivElement>(null)
@@ -138,21 +140,30 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
     }
   }, [])
 
-  // Check authentication status
+  // Check authentication status with the improved validation
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const { data } = await supabase.auth.getSession()
-        const isAuth = !!data.session || !!authToken
+        setIsAuthenticating(true)
+        const isAuth = await validateAuthentication()
         setIsAuthenticated(isAuth)
-        console.log("Authentication check:", isAuth ? "Authenticated" : "Not authenticated")
+        console.log("Authentication validation:", isAuth ? "Authenticated" : "Not authenticated")
+
+        // If authenticated, get the token
+        if (isAuth) {
+          const token = getAuthToken()
+          setAuthToken(token)
+        }
       } catch (error) {
         console.error("Error checking authentication:", error)
+        setIsAuthenticated(false)
+      } finally {
+        setIsAuthenticating(false)
       }
     }
 
     checkAuth()
-  }, [user, session, authToken])
+  }, [user, session])
 
   // Initialize with the provided replies and track their IDs
   useEffect(() => {
@@ -464,13 +475,20 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
   // Update the handleVote function to use throttling instead of debouncing
   const handleVote = useCallback(
     throttle((voteType: "like" | "dislike") => {
-      if ((!user && !authToken) || isVoting) {
-        if (!user && !authToken) setAuthModalOpen(true)
+      // Don't allow voting while authenticating or if already voting
+      if (isAuthenticating || isVoting) {
+        return
+      }
+
+      // Check if authenticated
+      if (!isAuthenticated) {
+        setAuthModalOpen(true)
         return
       }
 
       setIsVoting(true)
 
+      // Rest of the function remains the same...
       // Optimistically update UI
       if (voteType === "like") {
         review.likes = (review.likes || 0) + 1
@@ -499,6 +517,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
           // If authentication is required, show the auth modal
           if (!result.success && result.requireAuth) {
             setAuthModalOpen(true)
+            setIsAuthenticated(false) // Update authentication state
 
             // Revert optimistic update
             if (voteType === "like") {
@@ -524,19 +543,26 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
         }
       }, 300)
     }, 1000), // Throttle to one vote per second
-    [review.id, serviceId, isVoting, user, localReplies, authToken],
+    [review.id, serviceId, isVoting, isAuthenticating, isAuthenticated, authToken, localReplies],
   )
 
   // Similarly update the handleReplyVote function to use throttling
   const handleReplyVote = useCallback(
     throttle((replyId: number, voteType: "like" | "dislike") => {
-      if ((!user && !authToken) || isVoting) {
-        if (!user && !authToken) setAuthModalOpen(true)
+      // Don't allow voting while authenticating or if already voting
+      if (isAuthenticating || isVoting) {
+        return
+      }
+
+      // Check if authenticated
+      if (!isAuthenticated) {
+        setAuthModalOpen(true)
         return
       }
 
       setIsVoting(true)
 
+      // Rest of the function remains the same...
       // Find the reply and optimistically update it
       setLocalReplies((prev) => {
         const updateReplyVote = (replies: Reply[]): Reply[] => {
@@ -630,8 +656,8 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
           setIsVoting(false)
         }
       }, 300)
-    }, 1000), // Throttle to one vote per second
-    [serviceId, isVoting, user, authToken],
+    }, 1000),
+    [serviceId, isVoting, isAuthenticating, isAuthenticated, authToken],
   )
 
   const handleAuthSuccess = async () => {
