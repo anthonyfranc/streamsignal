@@ -3,14 +3,12 @@
 import type React from "react"
 
 import { useState, useEffect } from "react"
-import { Send } from "lucide-react"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { Separator } from "@/components/ui/separator"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { ReviewComment } from "./review-comment"
-import { AuthButton } from "@/components/auth/auth-button"
 import { useReviews } from "@/contexts/reviews-context"
+import { getUserDisplayName } from "@/lib/auth-utils"
 
 interface ReviewCommentsSectionProps {
   reviewId: number
@@ -18,48 +16,65 @@ interface ReviewCommentsSectionProps {
 }
 
 export function ReviewCommentsSection({ reviewId, serviceId }: ReviewCommentsSectionProps) {
-  const { currentUser, comments, fetchComments, submitComment } = useReviews()
-  const [isLoading, setIsLoading] = useState(true)
+  const { comments, currentUser, fetchComments, submitComment } = useReviews()
   const [commentContent, setCommentContent] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [showAllComments, setShowAllComments] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [userDisplayName, setUserDisplayName] = useState<string>("Anonymous")
+  const [hasFetchedComments, setHasFetchedComments] = useState(false)
 
+  // Fetch comments for this review
   useEffect(() => {
-    const loadComments = async () => {
-      setIsLoading(true)
-      try {
-        await fetchComments(reviewId)
-      } catch (error) {
-        console.error("Error loading comments:", error)
-      } finally {
-        setIsLoading(false)
-      }
+    if (!hasFetchedComments) {
+      fetchComments(reviewId).then(() => {
+        setHasFetchedComments(true)
+      })
     }
+  }, [reviewId, fetchComments, hasFetchedComments])
 
-    loadComments()
-  }, [reviewId, fetchComments])
+  // Update user display name when currentUser changes
+  useEffect(() => {
+    if (currentUser) {
+      setUserDisplayName(getUserDisplayName(currentUser))
+    }
+  }, [currentUser])
 
+  // Get comments for this review
+  const reviewComments = comments[reviewId] || []
+
+  // Handle comment submission
   const handleCommentSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!commentContent.trim() || !currentUser) return
+
+    if (!currentUser) {
+      setError("You must be logged in to comment")
+      return
+    }
+
+    if (!commentContent.trim()) {
+      setError("Comment cannot be empty")
+      return
+    }
 
     setIsSubmitting(true)
-    try {
-      const formData = new FormData()
-      formData.append("reviewId", reviewId.toString())
-      formData.append("content", commentContent)
-      formData.append("serviceId", serviceId.toString())
+    setError(null)
 
-      const result = await submitComment(formData)
+    const formData = new FormData()
+    formData.append("reviewId", reviewId.toString())
+    formData.append("content", commentContent)
+    formData.append("serviceId", serviceId.toString())
 
-      if (result.success) {
-        setCommentContent("")
-      }
-    } catch (error) {
-      console.error("Error submitting comment:", error)
-    } finally {
-      setIsSubmitting(false)
+    const result = await submitComment(formData)
+
+    setIsSubmitting(false)
+
+    if (!result.success) {
+      setError(result.error)
+      return
     }
+
+    // Reset form
+    setCommentContent("")
   }
 
   // Get initials for avatar fallback
@@ -72,86 +87,44 @@ export function ReviewCommentsSection({ reviewId, serviceId }: ReviewCommentsSec
       .substring(0, 2)
   }
 
-  const reviewComments = comments[reviewId] || []
-
-  // Display only the first 3 comments unless showAllComments is true
-  const displayedComments = showAllComments ? reviewComments : reviewComments.slice(0, 3)
-  const hasMoreComments = reviewComments.length > 3 && !showAllComments
-
   return (
-    <div className="space-y-4">
-      {reviewComments.length > 0 && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span>
-            {reviewComments.length} {reviewComments.length === 1 ? "comment" : "comments"}
-          </span>
-          <Separator className="w-4" />
-          <button className="text-primary hover:underline text-xs font-medium">Most relevant</button>
-        </div>
-      )}
-
+    <div className="space-y-6">
       {currentUser ? (
-        <div className="flex items-start gap-3">
-          <Avatar className="h-8 w-8 border shadow-sm">
-            <AvatarImage
-              src={currentUser.user_metadata?.avatar_url || "/placeholder.svg"}
-              alt={currentUser.user_metadata?.full_name || "You"}
-            />
+        <form onSubmit={handleCommentSubmit} className="flex gap-3">
+          <Avatar className="h-8 w-8 flex-shrink-0">
+            <AvatarImage src={currentUser?.user_metadata?.avatar_url || "/placeholder.svg"} alt={userDisplayName} />
             <AvatarFallback className="bg-primary/10 text-primary text-xs">
-              {getInitials(currentUser.user_metadata?.full_name || "You")}
+              {getInitials(userDisplayName)}
             </AvatarFallback>
           </Avatar>
-          <form onSubmit={handleCommentSubmit} className="flex-1 relative">
+          <div className="flex-1 space-y-2">
             <Textarea
+              placeholder="Write a comment..."
               value={commentContent}
               onChange={(e) => setCommentContent(e.target.value)}
-              placeholder="Write a comment..."
-              className="min-h-[60px] pr-10 resize-none text-sm rounded-2xl py-2.5 bg-muted/50"
-              disabled={isSubmitting}
+              className="min-h-[80px] bg-background resize-none"
             />
-            <Button
-              type="submit"
-              size="icon"
-              className="absolute bottom-2 right-2 h-7 w-7 rounded-full bg-primary hover:bg-primary/90"
-              disabled={isSubmitting || !commentContent.trim()}
-            >
-              <Send className="h-3.5 w-3.5 text-primary-foreground" />
-            </Button>
-          </form>
-        </div>
+            <div className="flex justify-between items-center">
+              {error && <p className="text-xs text-destructive">{error}</p>}
+              <Button type="submit" size="sm" disabled={isSubmitting || !commentContent.trim()} className="ml-auto">
+                {isSubmitting ? "Posting..." : "Post"}
+              </Button>
+            </div>
+          </div>
+        </form>
       ) : (
-        <div className="flex items-center justify-between bg-muted/50 p-3 rounded-xl">
-          <p className="text-sm text-muted-foreground">Sign in to leave a comment</p>
-          <AuthButton />
-        </div>
+        <p className="text-sm text-muted-foreground">Sign in to join the conversation</p>
       )}
 
-      <div className="space-y-4 pt-2">
-        {isLoading ? (
-          <div className="text-center py-2">
-            <p className="text-sm text-muted-foreground">Loading comments...</p>
-          </div>
-        ) : reviewComments.length === 0 ? (
-          <div className="text-center py-4">
-            <p className="text-sm text-muted-foreground">No comments yet. Be the first to comment!</p>
-          </div>
-        ) : (
-          <>
-            {displayedComments.map((comment) => (
-              <ReviewComment key={comment.id} comment={comment} serviceId={serviceId} />
-            ))}
-
-            {hasMoreComments && (
-              <button
-                className="text-sm text-primary font-medium hover:underline"
-                onClick={() => setShowAllComments(true)}
-              >
-                View all {reviewComments.length} comments
-              </button>
-            )}
-          </>
-        )}
-      </div>
+      {hasFetchedComments && reviewComments.length === 0 ? (
+        <p className="text-sm text-muted-foreground text-center py-4">No comments yet. Be the first to comment!</p>
+      ) : (
+        <div className="space-y-4">
+          {reviewComments.map((comment) => (
+            <ReviewComment key={comment.id} comment={comment} serviceId={serviceId} nestingLevel={1} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }

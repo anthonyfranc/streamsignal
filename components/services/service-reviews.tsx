@@ -49,10 +49,17 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
   const [expandedReviews, setExpandedReviews] = useState<Record<number, boolean>>({})
   const [expandedComments, setExpandedComments] = useState<Record<number, boolean>>({})
 
-  // Fetch reviews
+  // Track if we've already fetched reviews
+  const [hasFetchedReviews, setHasFetchedReviews] = useState(false)
+
+  // Fetch reviews only once when component mounts or when serviceId changes
   useEffect(() => {
-    fetchReviews(serviceId)
-  }, [serviceId, fetchReviews])
+    if (!hasFetchedReviews) {
+      fetchReviews(serviceId).then(() => {
+        setHasFetchedReviews(true)
+      })
+    }
+  }, [serviceId, fetchReviews, hasFetchedReviews])
 
   // Update user display name when currentUser changes
   useEffect(() => {

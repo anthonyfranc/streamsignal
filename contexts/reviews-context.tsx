@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { createContext, useContext, useState, useEffect, useCallback } from "react"
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react"
 import { supabase } from "@/lib/supabase"
 import { getCurrentUser } from "@/lib/auth-utils"
 import type { ServiceReview, ReviewComment } from "@/types/reviews"
@@ -30,6 +30,10 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true)
   const [currentUser, setCurrentUser] = useState<any | null>(null)
 
+  // Use refs to track if we've already fetched data
+  const fetchedReviewsRef = useRef<Record<number, boolean>>({})
+  const fetchedCommentsRef = useRef<Record<number, boolean>>({})
+
   // Check current user
   useEffect(() => {
     const checkUser = async () => {
@@ -42,6 +46,11 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
   // Fetch reviews for a service
   const fetchReviews = useCallback(
     async (serviceId: number) => {
+      // Skip if we're already loading or have fetched this service's reviews
+      if (fetchedReviewsRef.current[serviceId]) {
+        return
+      }
+
       setIsLoading(true)
       try {
         const { data, error } = await supabase
@@ -67,16 +76,22 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
                 .in("review_id", reviewIds)
 
               if (!reactionsError && reactions) {
-                const newUserReactions = { ...userReactions }
+                const newUserReactions: Record<string, string> = {}
                 reactions.forEach((reaction) => {
                   newUserReactions[`review_${reaction.review_id}`] = reaction.reaction_type
                 })
-                setUserReactions(newUserReactions)
+                setUserReactions((prev) => ({
+                  ...prev,
+                  ...newUserReactions,
+                }))
               } else if (reactionsError) {
                 console.error("Error fetching review reactions:", reactionsError)
               }
             }
           }
+
+          // Mark this service's reviews as fetched
+          fetchedReviewsRef.current[serviceId] = true
         }
       } catch (error) {
         console.error("Error fetching reviews:", error)
@@ -84,12 +99,23 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         setIsLoading(false)
       }
     },
-    [currentUser, userReactions],
+    [currentUser],
   )
+
+  // Reset fetched state when current user changes
+  useEffect(() => {
+    fetchedReviewsRef.current = {}
+    fetchedCommentsRef.current = {}
+  }, [currentUser])
 
   // Fetch comments for a review
   const fetchComments = useCallback(
     async (reviewId: number): Promise<ReviewComment[]> => {
+      // Skip if we've already fetched comments for this review
+      if (fetchedCommentsRef.current[reviewId]) {
+        return comments[reviewId] || []
+      }
+
       try {
         // Get all top-level comments for this review
         const { data: topLevelComments, error: commentsError } = await supabase
@@ -179,13 +205,16 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           [reviewId]: processedTopComments,
         }))
 
+        // Mark this review's comments as fetched
+        fetchedCommentsRef.current[reviewId] = true
+
         return processedTopComments
       } catch (error) {
         console.error("Error getting review comments:", error)
         return []
       }
     },
-    [currentUser, setUserReactions],
+    [currentUser, comments],
   )
 
   // Submit a new review
@@ -500,7 +529,12 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         console.error("Error reacting to review:", error)
         // Revert optimistic update on error
-        await fetchReviews(reviews[0]?.service_id)
+        const serviceId = reviews.find((r) => r.id === reviewId)?.service_id
+        if (serviceId) {
+          // Reset the fetched flag so we can fetch fresh data
+          fetchedReviewsRef.current[serviceId] = false
+          await fetchReviews(serviceId)
+        }
       }
     },
     [currentUser, userReactions, reviews, fetchReviews],
