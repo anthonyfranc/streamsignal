@@ -57,15 +57,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         // Force a router refresh to update server components
         router.refresh()
-
-        // Make a request to the auth-debug endpoint to verify server-side auth
-        try {
-          const response = await fetch("/api/auth-debug")
-          const debugData = await response.json()
-          console.log("Server auth status after refresh:", debugData)
-        } catch (e) {
-          console.error("Error checking server auth:", e)
-        }
       } else {
         console.warn("No session returned from refresh")
       }
@@ -83,14 +74,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const initializeAuth = async () => {
       try {
         setIsLoading(true)
-        console.log("Initializing auth...")
 
         // Get the current session
         const {
           data: { session },
         } = await supabase.auth.getSession()
 
-        console.log("Initial session:", !!session)
         setSession(session)
         setUser(session?.user ?? null)
 
@@ -110,23 +99,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             await refreshSession()
           }
         }
-
-        // Make a request to the auth-debug endpoint to verify server-side auth
-        if (session) {
-          try {
-            const response = await fetch("/api/auth-debug")
-            const debugData = await response.json()
-            console.log("Server auth status on init:", debugData)
-
-            // If server doesn't recognize auth but we have a session, force a refresh
-            if (!debugData.authenticated && session) {
-              console.log("Server doesn't recognize auth, forcing refresh...")
-              await refreshSession()
-            }
-          } catch (e) {
-            console.error("Error checking server auth:", e)
-          }
-        }
       } catch (error) {
         console.error("Error initializing auth:", error)
       } finally {
@@ -139,7 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Listen for auth changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    } = supabase.auth.onAuthStateChange((_event, session) => {
       console.log("Auth state changed:", _event)
       setSession(session)
       setUser(session?.user ?? null)
@@ -153,27 +125,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       // Force a router refresh to update server components
       router.refresh()
-
-      // For sign in events, make a request to verify server auth
-      if (_event === "SIGNED_IN") {
-        console.log("User signed in, verifying server auth...")
-        // Wait a moment for cookies to be set
-        setTimeout(async () => {
-          try {
-            const response = await fetch("/api/auth-debug")
-            const debugData = await response.json()
-            console.log("Server auth status after sign in:", debugData)
-
-            // If server doesn't recognize auth, force a refresh
-            if (!debugData.authenticated && session) {
-              console.log("Server doesn't recognize auth after sign in, forcing refresh...")
-              await refreshSession()
-            }
-          } catch (e) {
-            console.error("Error checking server auth:", e)
-          }
-        }, 500)
-      }
     })
 
     return () => subscription.unsubscribe()
@@ -209,31 +160,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signIn = async (email: string, password: string) => {
     try {
-      console.log("Signing in...")
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+      const { error } = await supabase.auth.signInWithPassword({ email, password })
 
       if (!error) {
-        console.log("Sign in successful")
         // Force a router refresh to update server components
         router.refresh()
-
-        // Wait a moment for cookies to be set
-        setTimeout(async () => {
-          try {
-            const response = await fetch("/api/auth-debug")
-            const debugData = await response.json()
-            console.log("Server auth status after sign in:", debugData)
-          } catch (e) {
-            console.error("Error checking server auth:", e)
-          }
-        }, 500)
-      } else {
-        console.error("Sign in error:", error)
       }
 
       return { error }
     } catch (error) {
-      console.error("Sign in exception:", error)
+      console.error("Sign in error:", error)
       return { error }
     }
   }

@@ -1,93 +1,10 @@
-// Import cookies but in a way that can be mocked
-import { cookies as nextCookies } from "next/headers"
-import { createServerClient } from "@supabase/ssr"
-import type { Database } from "@/types/database"
+import { createServerComponentClient } from "./supabase-client-factory"
+import { cache } from "react"
 
-// Helper to safely access cookies
-function getCookieStore() {
+// Use React cache to prevent multiple calls to getServerUser within the same render cycle
+export const getServerUser = cache(async () => {
   try {
-    return nextCookies()
-  } catch (e) {
-    // Return a mock implementation if nextCookies() fails
-    // This will happen in Pages Router
-    return {
-      get: () => null,
-      getAll: () => [],
-      set: () => {},
-      delete: () => {},
-    }
-  }
-}
-
-/**
- * Gets the current authenticated user from the server
- */
-export async function getServerUser(context?: any) {
-  try {
-    let supabase
-
-    // Check if we're in Pages Router (context provided)
-    if (context && context.req && context.res) {
-      // Create Supabase client for Pages Router
-      supabase = createServerClient<Database>(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        {
-          cookies: {
-            get(name: string) {
-              return context.req.cookies[name]
-            },
-            set(name: string, value: string, options: any) {
-              context.res.setHeader(
-                "Set-Cookie",
-                `${name}=${value}; Path=${options.path || "/"}; ${
-                  options.httpOnly ? "HttpOnly;" : ""
-                } ${options.secure ? "Secure;" : ""} ${options.sameSite ? `SameSite=${options.sameSite};` : ""}`,
-              )
-            },
-            remove(name: string, options: any) {
-              context.res.setHeader(
-                "Set-Cookie",
-                `${name}=; Path=${options.path || "/"}; Expires=Thu, 01 Jan 1970 00:00:00 GMT`,
-              )
-            },
-          },
-        },
-      )
-    } else {
-      // We're in App Router
-      const cookieStore = getCookieStore()
-
-      // Create Supabase client for App Router
-      supabase = createServerClient<Database>(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        {
-          cookies: {
-            get(name: string) {
-              const cookie = cookieStore.get(name)
-              return cookie?.value
-            },
-            set(name: string, value: string, options: any) {
-              try {
-                cookieStore.set({ name, value, ...options })
-              } catch (e) {
-                // Expected error in Server Components
-                console.log(`Cannot set cookie in Server Component: ${name}`)
-              }
-            },
-            remove(name: string, options: any) {
-              try {
-                cookieStore.delete({ name, ...options })
-              } catch (e) {
-                // Expected error in Server Components
-                console.log(`Cannot delete cookie in Server Component: ${name}`)
-              }
-            },
-          },
-        },
-      )
-    }
+    const supabase = createServerComponentClient()
 
     // Use getUser() to validate the token
     const { data, error } = await supabase.auth.getUser()
@@ -102,18 +19,46 @@ export async function getServerUser(context?: any) {
     console.error("Exception in getServerUser:", err)
     return { user: null, error: err }
   }
-}
+})
 
 /**
  * Verifies if a user is authenticated on the server
  * Returns the user ID if authenticated, null otherwise
  */
-export async function verifyServerAuth(context?: any) {
-  const { user, error } = await getServerUser(context)
+export async function verifyServerAuth() {
+  const { user, error } = await getServerUser()
 
-  if (error || !user) {
+  if (error) {
+    console.error("Auth verification error:", error)
+    return null
+  }
+
+  if (!user) {
+    console.log("No authenticated user found")
     return null
   }
 
   return user.id
+}
+
+/**
+ * Gets the user's profile data
+ * Returns the profile data if available, null otherwise
+ */
+export async function getUserProfile(userId: string) {
+  try {
+    const supabase = createServerComponentClient()
+
+    const { data, error } = await supabase.from("user_profiles").select("*").eq("id", userId).single()
+
+    if (error) {
+      console.error("Error getting user profile:", error.message)
+      return null
+    }
+
+    return data
+  } catch (err) {
+    console.error("Exception in getUserProfile:", err)
+    return null
+  }
 }

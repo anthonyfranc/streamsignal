@@ -1,73 +1,31 @@
 import { createClient } from "@supabase/supabase-js"
 import { createServerClient } from "@supabase/ssr"
 import type { CookieOptions } from "@supabase/ssr"
+import { cookies } from "next/headers"
 import type { Database } from "@/types/database"
 
-// Environment variable validation with better client-side handling
+// Environment variable validation
 const getEnvVariable = (key: string): string => {
-  // For client-side, we need to check if the variable exists
-  // and provide a fallback to prevent build errors
-  if (typeof window !== "undefined") {
-    // We're in the browser
-    const value = process.env[key] as string
-
-    // Log the environment variable for debugging (redacted for security)
-    if (!value) {
-      console.error(`${key} is not available in client-side code`)
-    } else {
-      console.log(`${key} is available (value length: ${value.length})`)
-    }
-
-    return value || ""
-  }
-
-  // For server-side, we can be strict
   const value = process.env[key]
   if (!value) {
-    console.error(`${key} is required but not provided on server-side`)
-    return ""
+    throw new Error(`${key} is required but not provided`)
   }
   return value
 }
 
-// Get Supabase URL and anon key with better logging
-export const supabaseUrl = (() => {
-  const url = getEnvVariable("NEXT_PUBLIC_SUPABASE_URL")
-  if (!url && typeof window !== "undefined") {
-    console.error("NEXT_PUBLIC_SUPABASE_URL is missing in client-side code")
-  }
-  return url
-})()
+// Get Supabase URL and anon key
+export const supabaseUrl = getEnvVariable("NEXT_PUBLIC_SUPABASE_URL")
+export const supabaseAnonKey = getEnvVariable("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 
-export const supabaseAnonKey = (() => {
-  const key = getEnvVariable("NEXT_PUBLIC_SUPABASE_ANON_KEY")
-  if (!key && typeof window !== "undefined") {
-    console.error("NEXT_PUBLIC_SUPABASE_ANON_KEY is missing in client-side code")
-  }
-  return key
-})()
+// Type for cookie handlers
+type CookieHandler = {
+  get: (name: string) => string | undefined
+  set: (name: string, value: string, options: CookieOptions) => void
+  remove: (name: string, options: CookieOptions) => void
+}
 
-// Create a browser client (for client components) with better error handling
+// Create a browser client (for client components)
 export const createBrowserClient = () => {
-  // Check if we have the required environment variables
-  if (!supabaseUrl || !supabaseAnonKey) {
-    console.error("Missing required Supabase environment variables in createBrowserClient")
-    console.log(
-      "Available env vars:",
-      Object.keys(process.env)
-        .filter((key) => key.startsWith("NEXT_PUBLIC_"))
-        .join(", "),
-    )
-
-    // Return a dummy client that will fail gracefully
-    return createClient("https://placeholder-url.supabase.co", "placeholder-key", {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    }) as any
-  }
-
   return createClient<Database>(supabaseUrl, supabaseAnonKey, {
     auth: {
       persistSession: true,
@@ -79,35 +37,8 @@ export const createBrowserClient = () => {
 
 // Create a server client with cookie handling
 export const createServerComponentClient = () => {
-  // We need to dynamically import cookies from next/headers
-  // This ensures it's only imported in the App Router
-  let cookieStore: any = null
+  const cookieStore = cookies()
 
-  try {
-    // This will throw an error in the Pages Router
-    // We'll catch it and provide an alternative
-    if (typeof window === "undefined") {
-      // Using dynamic import to avoid static analysis
-      const getCookies = new Function('return import("next/headers").then(mod => mod.cookies)')
-      cookieStore = getCookies()
-    }
-  } catch (e) {
-    // This will happen in the Pages Router
-    // We'll provide an alternative below
-    console.debug("Could not import cookies from next/headers - this is expected in Pages Router")
-  }
-
-  // If we couldn't get cookies from next/headers, return a dummy client
-  // This client will only be used during build time in the Pages Router
-  if (!cookieStore) {
-    return createClient<Database>(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        persistSession: false,
-      },
-    })
-  }
-
-  // Otherwise, return a proper server client
   return createServerClient<Database>(supabaseUrl, supabaseAnonKey, {
     cookies: {
       get(name: string) {
@@ -179,33 +110,7 @@ export const createMiddlewareClient = (request: Request, response: Response) => 
 
 // Create a server action client
 export const createServerActionClient = () => {
-  // We need to dynamically import cookies from next/headers
-  // This ensures it's only imported in the App Router
-  let cookieStore: any = null
-
-  try {
-    // This will throw an error in the Pages Router
-    // We'll catch it and provide an alternative
-    if (typeof window === "undefined") {
-      // Using dynamic import to avoid static analysis
-      const getCookies = new Function('return import("next/headers").then(mod => mod.cookies)')
-      cookieStore = getCookies()
-    }
-  } catch (e) {
-    // This will happen in the Pages Router
-    // We'll provide an alternative below
-    console.debug("Could not import cookies from next/headers - this is expected in Pages Router")
-  }
-
-  // If we couldn't get cookies from next/headers, return a dummy client
-  // This client will only be used during build time in the Pages Router
-  if (!cookieStore) {
-    return createClient<Database>(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        persistSession: false,
-      },
-    })
-  }
+  const cookieStore = cookies()
 
   return createServerClient<Database>(supabaseUrl, supabaseAnonKey, {
     cookies: {
@@ -234,33 +139,7 @@ export const createServerActionClient = () => {
 
 // Create an API route client
 export const createRouteHandlerClient = () => {
-  // We need to dynamically import cookies from next/headers
-  // This ensures it's only imported in the App Router
-  let cookieStore: any = null
-
-  try {
-    // This will throw an error in the Pages Router
-    // We'll catch it and provide an alternative
-    if (typeof window === "undefined") {
-      // Using dynamic import to avoid static analysis
-      const getCookies = new Function('return import("next/headers").then(mod => mod.cookies)')
-      cookieStore = getCookies()
-    }
-  } catch (e) {
-    // This will happen in the Pages Router
-    // We'll provide an alternative below
-    console.debug("Could not import cookies from next/headers - this is expected in Pages Router")
-  }
-
-  // If we couldn't get cookies from next/headers, return a dummy client
-  // This client will only be used during build time in the Pages Router
-  if (!cookieStore) {
-    return createClient<Database>(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        persistSession: false,
-      },
-    })
-  }
+  const cookieStore = cookies()
 
   return createServerClient<Database>(supabaseUrl, supabaseAnonKey, {
     cookies: {
