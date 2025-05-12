@@ -14,46 +14,11 @@ export async function submitVote(
     const cookieStore = cookies()
     const supabase = createServerClient(cookieStore)
 
-    // Extract the auth token from the form data
-    const authToken = formData.get("authToken") as string
+    // Check if user is authenticated
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
 
-    // Check if user is authenticated - first try with cookies, then with the provided token
-    let session = null
-
-    // First try with cookies (for SSR/server components)
-    const { data: cookieSession } = await supabase.auth.getSession()
-    session = cookieSession.session
-
-    // If no session from cookies and we have an auth token, try to use it
-    if (!session && authToken) {
-      try {
-        // Try to set the session with the provided token
-        const { data, error } = await supabase.auth.setSession({
-          access_token: authToken,
-          refresh_token: "", // We don't have a refresh token from the client
-        })
-
-        if (error) {
-          console.error("Error setting session with auth token:", error)
-          return {
-            success: false,
-            message: "Authentication failed. Please sign in again.",
-            requireAuth: true,
-          }
-        }
-
-        session = data.session
-      } catch (error) {
-        console.error("Error processing auth token:", error)
-        return {
-          success: false,
-          message: "Authentication failed. Please sign in again.",
-          requireAuth: true,
-        }
-      }
-    }
-
-    // If still no valid session, require authentication
     if (!session) {
       return {
         success: false,
@@ -77,7 +42,6 @@ export async function submitVote(
       return { success: false, message: "Invalid vote type" }
     }
 
-    // Rest of the function remains the same...
     // Check if the user has already voted on this review/reply
     let existingVote
     let existingVoteError
@@ -237,7 +201,7 @@ export async function submitVote(
   }
 }
 
-// Helper functions remain the same...
+// Helper function to update the vote count in a review
 async function updateReviewVoteCount(supabase: any, reviewId: number) {
   try {
     // Count likes
@@ -308,6 +272,7 @@ async function updateReviewVoteCount(supabase: any, reviewId: number) {
   }
 }
 
+// Helper function to update the vote count in a reply
 async function updateReplyVoteCount(supabase: any, replyId: number) {
   try {
     // Count likes

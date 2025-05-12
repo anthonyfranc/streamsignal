@@ -17,8 +17,7 @@ import type { Review, Reply } from "@/types/reviews"
 import { formatDistanceToNow } from "date-fns"
 import { AnimatePresence, motion } from "framer-motion"
 import { supabase } from "@/lib/supabase"
-// Import the new validation function
-import { getAuthToken, validateAuthentication } from "@/utils/auth-utils"
+import type { RealtimeChannel } from "@supabase/supabase-js"
 
 // Add isVisible prop to the ReviewItem component
 interface ReviewItemProps {
@@ -28,8 +27,18 @@ interface ReviewItemProps {
   isVisible?: boolean
 }
 
+// Simple debounce function
+function debounce<T extends (...args: any[]) => any>(func: T, wait: number): (...args: Parameters<T>) => void {
+  let timeout: ReturnType<typeof setTimeout> | null = null
+
+  return (...args: Parameters<T>) => {
+    if (timeout) clearTimeout(timeout)
+    timeout = setTimeout(() => func(...args), wait)
+  }
+}
+
 // Simple throttle function
-function throttle<T extends (...args: any[]) => any>(func: T, limit: number): (...args: Parameters<T>) => void {
+function throttle<T extends (...args: any[]) => any>(func: T, limit: number): (...args: any[]) => void {
   let lastFunc: ReturnType<typeof setTimeout>
   let lastRan = 0
 
@@ -91,6 +100,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
   const [showReplies, setShowReplies] = useState(false)
   const [replyContent, setReplyContent] = useState("")
   const [localReplies, setLocalReplies] = useState<Reply[]>(initialReplies)
+  const [formRef] = useState<any>(null)
   const replyInputRef = useRef<HTMLTextAreaElement>(null)
   const newReplyRef = useRef<HTMLDivElement>(null)
   const [newReplyId, setNewReplyId] = useState<number | null>(null)
@@ -98,72 +108,228 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
   const [pendingReplyIds, setPendingReplyIds] = useState<Set<number>>(new Set())
   const [optimisticReplyMap, setOptimisticReplyMap] = useState<Map<number, number>>(new Map())
   const [isVoting, setIsVoting] = useState(false)
-  const [authToken, setAuthToken] = useState<string | null>(null)
-  const [isAuthenticating, setIsAuthenticating] = useState(false)
 
-  // Track when the component is actually visible in the viewport
-  const reviewItemRef = useRef<HTMLDivElement>(null)
-  const [isInViewport, setIsInViewport] = useState(false)
-
-  // Set up intersection observer to detect when the component is visible
-  useEffect(() => {
-    if (!reviewItemRef.current) return
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const [entry] = entries
-        setIsInViewport(entry.isIntersecting)
-      },
-      {
-        root: null,
-        rootMargin: "0px",
-        threshold: 0.1, // Consider visible when 10% is in viewport
-      },
-    )
-
-    observer.observe(reviewItemRef.current)
-
-    return () => {
-      observer.disconnect()
-    }
-  }, [])
+  // Use refs to store channel instances to prevent recreation on each render
+  const replyChannelRef = useRef<RealtimeChannel | null>(null)
+  const voteChannelRef = useRef<RealtimeChannel | null>(null)
 
   // Track processed reply IDs to prevent duplicates
   const processedReplyIdsRef = useRef<Set<number>>(new Set())
 
-  // Get auth token on component mount
-  useEffect(() => {
-    // Only run on client side
-    if (typeof window !== "undefined") {
-      const token = getAuthToken()
-      setAuthToken(token)
-    }
-  }, [])
-
-  // Check authentication status with the improved validation
+  // Check authentication status
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        setIsAuthenticating(true)
-        const isAuth = await validateAuthentication()
-        setIsAuthenticated(isAuth)
-        console.log("Authentication validation:", isAuth ? "Authenticated" : "Not authenticated")
-
-        // If authenticated, get the token
-        if (isAuth) {
-          const token = getAuthToken()
-          setAuthToken(token)
-        }
+        const { data } = await supabase.auth.getSession()
+        setIsAuthenticated(!!data.session)
+        console.log("Authentication check:", !!data.session ? "Authenticated" : "Not authenticated")
       } catch (error) {
         console.error("Error checking authentication:", error)
-        setIsAuthenticated(false)
-      } finally {
-        setIsAuthenticating(false)
       }
     }
 
     checkAuth()
   }, [user, session])
+
+  // Set up real-time subscriptions
+  useEffect(() => {
+    // Clean up function to remove channels
+    const cleanup = () => {
+      if (replyChannelRef.current) {
+        console.log("Removing reply channel")
+        supabase.removeChannel(replyChannelRef.current)
+        replyChannelRef.current = null
+      }
+
+      if (voteChannelRef.current) {
+        console.log("Removing vote channel")
+        supabase.removeChannel(voteChannelRef.current)
+        voteChannelRef.current = null
+      }
+    }
+
+    // Don't set up subscriptions if the component isn't visible
+    if (!isVisible) {
+      return cleanup
+    }
+
+    // Clean up any existing channels first
+    cleanup()
+
+    // Set up real-time subscription for replies to this review
+    const replyChannelName = `review_replies_${review.id}_${Date.now()}`
+    console.log(`Creating reply channel: ${replyChannelName}`)
+
+    replyChannelRef.current = supabase
+      .channel(replyChannelName)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "review_replies",
+          filter: `review_id=eq.${review.id}`,
+        },
+        async (payload) => {
+          if (payload.new && (payload.new as any).status === "approved") {
+            // For new replies, fetch the user profile
+            if (payload.eventType === "INSERT") {
+              const reply = payload.new as Reply
+
+              // Check if we've already processed this reply ID
+              if (processedReplyIdsRef.current.has(reply.id)) {
+                console.log("Already processed reply:", reply.id)
+                return
+              }
+
+              // Add to processed set
+              processedReplyIdsRef.current.add(reply.id)
+
+              // Check if this is a reply we've already handled optimistically
+              if (pendingReplyIds.has(reply.id)) {
+                console.log("Ignoring realtime update for optimistically handled reply:", reply.id)
+
+                // Remove from pending set since we've now received the real-time confirmation
+                setPendingReplyIds((prev) => {
+                  const newSet = new Set(prev)
+                  newSet.delete(reply.id)
+                  return newSet
+                })
+
+                return
+              }
+
+              // Check if this is a reply that replaces an optimistic one
+              const tempId = findTempIdForRealId(reply.id)
+              if (tempId) {
+                console.log("Replacing optimistic reply:", tempId, "with real reply:", reply.id)
+
+                // Replace the optimistic reply with the real one
+                setLocalReplies((prev) =>
+                  prev.map((r) => {
+                    if (r.id === tempId) {
+                      return {
+                        ...reply,
+                        user_profile: r.user_profile, // Keep the user profile from the optimistic reply
+                        replies: r.replies || [], // Keep any nested replies
+                      }
+                    }
+                    return r
+                  }),
+                )
+
+                // Remove the mapping
+                setOptimisticReplyMap((prev) => {
+                  const newMap = new Map(prev)
+                  newMap.delete(tempId)
+                  return newMap
+                })
+
+                return
+              }
+
+              // This is a genuinely new reply from someone else
+              const replyWithProfile = { ...reply, user_profile: { avatar_url: null }, replies: [] }
+
+              try {
+                if (reply.user_id) {
+                  const { data: profileData } = await supabase
+                    .from("user_profiles")
+                    .select("avatar_url")
+                    .eq("id", reply.user_id)
+                    .single()
+
+                  if (profileData) {
+                    replyWithProfile.user_profile = profileData
+                  }
+                }
+              } catch (error) {
+                console.error("Error fetching user profile:", error)
+              }
+
+              // Mark this as the newest reply for animation
+              setNewReplyId(reply.id)
+
+              // Update the local replies state based on parent_id
+              if (reply.parent_id === null) {
+                // Top-level reply
+                setLocalReplies((prev) => [...prev, replyWithProfile])
+              } else {
+                // Nested reply - update the thread structure
+                setLocalReplies((prev) => addNestedReply(prev, reply.parent_id!, replyWithProfile))
+              }
+
+              // Clear the new reply ID after animation
+              setTimeout(() => {
+                setNewReplyId(null)
+              }, 3000)
+            }
+            // For updated replies, update the local state
+            else if (payload.eventType === "UPDATE") {
+              setLocalReplies((prev) => updateReplyInThread(prev, (payload.new as Reply).id, payload.new as Reply))
+            }
+            // For deleted replies, remove from local state
+            else if (payload.eventType === "DELETE" && payload.old) {
+              setLocalReplies((prev) => removeReplyFromThread(prev, (payload.old as Reply).id))
+
+              // Remove from processed set
+              processedReplyIdsRef.current.delete((payload.old as Reply).id)
+            }
+          }
+        },
+      )
+      .subscribe((status) => {
+        console.log(`Realtime subscription to review_replies status: ${status}`)
+        if (status === "SUBSCRIBED") {
+          console.log(`Successfully subscribed to review_replies changes`)
+        } else if (status === "TIMED_OUT" || status === "CLOSED") {
+          console.log("Reply channel closed or timed out, will be recreated on next render")
+        }
+      })
+
+    // Set up real-time subscription for votes on this review
+    const voteChannelName = `review_votes_${review.id}_${Date.now()}`
+    console.log(`Creating vote channel: ${voteChannelName}`)
+
+    voteChannelRef.current = supabase
+      .channel(voteChannelName)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "review_votes",
+          filter: `review_id=eq.${review.id}`,
+        },
+        (payload) => {
+          // We'll handle vote updates by fetching the latest counts
+          if (payload.eventType === "INSERT" || payload.eventType === "DELETE") {
+            fetchReviewVoteCounts()
+          }
+        },
+      )
+      .subscribe((status) => {
+        console.log(`Realtime subscription to review_votes status: ${status}`)
+        if (status === "SUBSCRIBED") {
+          console.log(`Successfully subscribed to review_votes changes`)
+        } else if (status === "TIMED_OUT" || status === "CLOSED") {
+          console.log("Vote channel closed or timed out, will be recreated on next render")
+        }
+      })
+
+    // Return cleanup function
+    return cleanup
+  }, [review.id, isVisible]) // Add isVisible to the dependency array
+
+  // Helper function to find a temporary ID for a real ID
+  const findTempIdForRealId = (realId: number): number | null => {
+    for (const [tempId, mappedRealId] of optimisticReplyMap.entries()) {
+      if (mappedRealId === realId) {
+        return tempId
+      }
+    }
+    return null
+  }
 
   // Initialize with the provided replies and track their IDs
   useEffect(() => {
@@ -259,20 +425,10 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
     })
   }
 
-  // Helper function to find a temporary ID for a real ID
-  const findTempIdForRealId = (realId: number): number | null => {
-    for (const [tempId, mappedRealId] of optimisticReplyMap.entries()) {
-      if (mappedRealId === realId) {
-        return tempId
-      }
-    }
-    return null
-  }
-
   const handleReplySubmit = async (event: React.FormEvent, parentId: number | null = null) => {
     event.preventDefault()
 
-    if (!user && !authToken) {
+    if (!user || !session) {
       setAuthModalOpen(true)
       return
     }
@@ -288,19 +444,17 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
 
     try {
       // Ensure we have a fresh session
-      if (user) {
-        await refreshSession()
-      }
+      await refreshSession()
 
       // Force a new auth token to be used
       const { data: authData } = await supabase.auth.getSession()
-      if (!authData.session && !authToken) {
+      if (!authData.session) {
         setErrorMessage("Your session has expired. Please sign in again.")
         setAuthModalOpen(true)
         return
       }
 
-      console.log("Submitting reply with auth:", !!authData.session || !!authToken)
+      console.log("Submitting reply with auth:", !!authData.session)
 
       // Generate a temporary negative ID for the optimistic reply
       const tempId = -Math.floor(Math.random() * 1000000)
@@ -313,8 +467,8 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
         id: tempId, // Temporary negative ID
         review_id: review.id,
         parent_id: actualParentId,
-        user_id: user?.id || "anonymous",
-        author_name: user?.user_metadata?.full_name || user?.email?.split("@")[0] || "User",
+        user_id: user.id,
+        author_name: user.user_metadata?.full_name || user.email?.split("@")[0] || "User",
         content: replyContent,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -322,7 +476,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
         dislikes: 0,
         status: "approved",
         user_profile: {
-          avatar_url: user?.user_metadata?.avatar_url || null,
+          avatar_url: user.user_metadata?.avatar_url || null,
         },
         replies: [],
       }
@@ -345,9 +499,9 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
           .insert({
             review_id: review.id,
             parent_id: actualParentId,
-            user_id: user?.id || "anonymous",
+            user_id: user.id,
             author_name:
-              user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split("@")[0] || "User",
+              user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0] || "User",
             content: replyContent,
             likes: 0,
             dislikes: 0,
@@ -475,20 +629,13 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
   // Update the handleVote function to use throttling instead of debouncing
   const handleVote = useCallback(
     throttle((voteType: "like" | "dislike") => {
-      // Don't allow voting while authenticating or if already voting
-      if (isAuthenticating || isVoting) {
-        return
-      }
-
-      // Check if authenticated
-      if (!isAuthenticated) {
-        setAuthModalOpen(true)
+      if (!user || isVoting) {
+        if (!user) setAuthModalOpen(true)
         return
       }
 
       setIsVoting(true)
 
-      // Rest of the function remains the same...
       // Optimistically update UI
       if (voteType === "like") {
         review.likes = (review.likes || 0) + 1
@@ -507,27 +654,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
           formData.append("voteType", voteType)
           formData.append("serviceId", serviceId.toString())
 
-          // Add auth token to the form data if available
-          if (authToken) {
-            formData.append("authToken", authToken)
-          }
-
-          const result = await submitVote(formData)
-
-          // If authentication is required, show the auth modal
-          if (!result.success && result.requireAuth) {
-            setAuthModalOpen(true)
-            setIsAuthenticated(false) // Update authentication state
-
-            // Revert optimistic update
-            if (voteType === "like") {
-              review.likes = Math.max(0, (review.likes || 0) - 1)
-            } else {
-              review.dislikes = Math.max(0, (review.dislikes || 0) - 1)
-            }
-            // Force a re-render
-            setLocalReplies([...localReplies])
-          }
+          await submitVote(formData)
         } catch (error) {
           console.error("Error submitting vote:", error)
           // Revert optimistic update on error
@@ -543,26 +670,19 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
         }
       }, 300)
     }, 1000), // Throttle to one vote per second
-    [review.id, serviceId, isVoting, isAuthenticating, isAuthenticated, authToken, localReplies],
+    [review.id, serviceId, isVoting, user, localReplies],
   )
 
   // Similarly update the handleReplyVote function to use throttling
   const handleReplyVote = useCallback(
     throttle((replyId: number, voteType: "like" | "dislike") => {
-      // Don't allow voting while authenticating or if already voting
-      if (isAuthenticating || isVoting) {
-        return
-      }
-
-      // Check if authenticated
-      if (!isAuthenticated) {
-        setAuthModalOpen(true)
+      if (!user || isVoting) {
+        if (!user) setAuthModalOpen(true)
         return
       }
 
       setIsVoting(true)
 
-      // Rest of the function remains the same...
       // Find the reply and optimistically update it
       setLocalReplies((prev) => {
         const updateReplyVote = (replies: Reply[]): Reply[] => {
@@ -594,40 +714,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
           formData.append("voteType", voteType)
           formData.append("serviceId", serviceId.toString())
 
-          // Add auth token to the form data if available
-          if (authToken) {
-            formData.append("authToken", authToken)
-          }
-
-          const result = await submitVote(formData)
-
-          // If authentication is required, show the auth modal
-          if (!result.success && result.requireAuth) {
-            setAuthModalOpen(true)
-
-            // Revert optimistic update
-            setLocalReplies((prev) => {
-              const revertReplyVote = (replies: Reply[]): Reply[] => {
-                return replies.map((reply) => {
-                  if (reply.id === replyId) {
-                    return {
-                      ...reply,
-                      likes: voteType === "like" ? Math.max(0, (reply.likes || 0) - 1) : reply.likes,
-                      dislikes: voteType === "dislike" ? Math.max(0, (reply.dislikes || 0) - 1) : reply.dislikes,
-                    }
-                  }
-                  if (reply.replies && reply.replies.length > 0) {
-                    return {
-                      ...reply,
-                      replies: revertReplyVote(reply.replies),
-                    }
-                  }
-                  return reply
-                })
-              }
-              return revertReplyVote(prev)
-            })
-          }
+          await submitVote(formData)
         } catch (error) {
           console.error("Error submitting reply vote:", error)
           // Revert optimistic update on error
@@ -656,8 +743,8 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
           setIsVoting(false)
         }
       }, 300)
-    }, 1000),
-    [serviceId, isVoting, isAuthenticating, isAuthenticated, authToken],
+    }, 1000), // Throttle to one vote per second
+    [serviceId, isVoting, user],
   )
 
   const handleAuthSuccess = async () => {
@@ -670,10 +757,6 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
     // Update authentication status
     const { data } = await supabase.auth.getSession()
     setIsAuthenticated(!!data.session)
-
-    // Get the auth token
-    const token = getAuthToken()
-    setAuthToken(token)
 
     // Focus the reply input after a short delay
     setTimeout(() => {
@@ -693,7 +776,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
   }
 
   const initiateReply = (parentId: number | null = null, parentName = "") => {
-    if (!user && !authToken) {
+    if (!user) {
       setAuthModalOpen(true)
       return
     }
@@ -745,13 +828,11 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
 
       try {
         // Ensure we have a fresh session
-        if (user) {
-          await refreshSession()
-        }
+        await refreshSession()
 
         // Force a new auth token to be used
         const { data: authData } = await supabase.auth.getSession()
-        if (!authData.session && !authToken) {
+        if (!authData.session) {
           setErrorMessage("Your session has expired. Please sign in again.")
           setAuthModalOpen(true)
           setIsInlinePending(false)
@@ -766,8 +847,8 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
           id: tempId, // Temporary negative ID
           review_id: review.id,
           parent_id: parentId,
-          user_id: user?.id || "anonymous",
-          author_name: user?.user_metadata?.full_name || user?.email?.split("@")[0] || "User",
+          user_id: user!.id,
+          author_name: user!.user_metadata?.full_name || user!.email?.split("@")[0] || "User",
           content: inlineReplyContent,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -775,7 +856,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
           dislikes: 0,
           status: "approved",
           user_profile: {
-            avatar_url: user?.user_metadata?.avatar_url || null,
+            avatar_url: user!.user_metadata?.avatar_url || null,
           },
           replies: [],
         }
@@ -792,9 +873,9 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
           .insert({
             review_id: review.id,
             parent_id: parentId,
-            user_id: user?.id || "anonymous",
+            user_id: user!.id,
             author_name:
-              user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email?.split("@")[0] || "User",
+              user!.user_metadata?.full_name || user!.user_metadata?.name || user!.email?.split("@")[0] || "User",
             content: inlineReplyContent,
             likes: 0,
             dislikes: 0,
@@ -996,7 +1077,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
         </div>
 
         {/* Inline reply form when replying to this specific comment */}
-        {isReplying && (user || authToken) && <InlineReplyForm parentId={reply.id} parentName={reply.author_name} />}
+        {isReplying && user && <InlineReplyForm parentId={reply.id} parentName={reply.author_name} />}
 
         {/* Nested replies */}
         {reply.replies && reply.replies.length > 0 && (
@@ -1011,11 +1092,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
   }
 
   return (
-    <Card
-      key={review.id}
-      className="overflow-hidden mb-4 transition-all duration-300 hover:shadow-md"
-      ref={reviewItemRef}
-    >
+    <Card key={review.id} className="overflow-hidden mb-4 transition-all duration-300 hover:shadow-md">
       <CardContent className="p-0">
         <div className="flex items-start p-4 gap-4">
           <Avatar className="h-10 w-10 flex-shrink-0">
@@ -1065,6 +1142,13 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                 disabled={isVoting}
               >
                 <ThumbsDown className="h-3.5 w-3.5" />
+                <span>{review.dislikes > 0 ? review.dislikes : "Dislike"}</span>
+              </button>
+              <button
+                className="flex items-center gap-1 text-xs text-gray-500 transition-all duration-200 hover:text-gray-900 hover:scale-110"
+                onClick={toggleReplies}
+              >
+                <ThumbsUp className="h-3.5 w-3.5" />
                 <span>{review.dislikes > 0 ? review.dislikes : "Dislike"}</span>
               </button>
               <button
@@ -1121,7 +1205,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
             )}
 
             {/* Main reply form - only show if not replying to a specific comment */}
-            {(user || authToken) && !replyingTo && (
+            {user && !replyingTo && (
               <form
                 onSubmit={(e) => handleReplySubmit(e)}
                 className="flex items-start gap-3 mt-4"
@@ -1159,9 +1243,9 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
             )}
 
             {/* Sign in prompt if not logged in */}
-            {!user && !authToken && (
+            {!user && (
               <div
-                className="flex items-center justify-center p-3 bg-gray-50 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors mt-4"
+                className="flex items-center justify-center p-3 bg-gray-50 rounded-lg cursor:pointer hover:bg-gray-100 transition-colors"
                 onClick={() => setAuthModalOpen(true)}
               >
                 <span className="text-sm text-gray-500">Sign in to leave a comment</span>
