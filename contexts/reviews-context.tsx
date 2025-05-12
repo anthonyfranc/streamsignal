@@ -3,7 +3,7 @@
 import type React from "react"
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react"
 import { supabase } from "@/lib/supabase"
-import { getCurrentUser, getDisplayNameFromData } from "@/lib/auth-utils"
+import { getCurrentUser } from "@/lib/auth-utils"
 import type { ServiceReview, ReviewComment } from "@/types/reviews"
 
 type ReviewsContextType = {
@@ -35,20 +35,39 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
   // Use refs to track if we've already fetched data
   const fetchedReviewsRef = useRef<Record<number, boolean>>({})
   const fetchedCommentsRef = useRef<Record<number, boolean>>({})
+  const isFetchingUserProfile = useRef(false)
 
   // Check current user and fetch profile
   useEffect(() => {
     const checkUser = async () => {
-      const user = await getCurrentUser()
-      setCurrentUser(user)
+      try {
+        const user = await getCurrentUser()
+        setCurrentUser(user)
 
-      if (user) {
-        // Fetch user profile
-        const { data: profile } = await supabase.from("user_profiles").select("*").eq("user_id", user.id).single()
+        if (user && !isFetchingUserProfile.current) {
+          isFetchingUserProfile.current = true
 
-        setUserProfile(profile)
+          try {
+            // Fetch user profile
+            const { data: profile } = await supabase
+              .from("user_profiles")
+              .select("*")
+              .eq("user_id", user.id)
+              .maybeSingle()
+
+            setUserProfile(profile || null)
+          } catch (error) {
+            console.error("Error fetching user profile:", error)
+            setUserProfile(null)
+          } finally {
+            isFetchingUserProfile.current = false
+          }
+        }
+      } catch (error) {
+        console.error("Error checking user:", error)
       }
     }
+
     checkUser()
   }, [])
 
@@ -70,6 +89,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
         if (error) {
           console.error("Error fetching reviews:", error)
+          setReviews([])
         } else {
           setReviews(data || [])
 
@@ -78,23 +98,27 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
             const reviewIds = data?.map((review) => review.id) || []
 
             if (reviewIds.length > 0) {
-              const { data: reactions, error: reactionsError } = await supabase
-                .from("review_reactions")
-                .select("review_id, reaction_type")
-                .eq("user_id", currentUser.id)
-                .in("review_id", reviewIds)
+              try {
+                const { data: reactions, error: reactionsError } = await supabase
+                  .from("review_reactions")
+                  .select("review_id, reaction_type")
+                  .eq("user_id", currentUser.id)
+                  .in("review_id", reviewIds)
 
-              if (!reactionsError && reactions) {
-                const newUserReactions: Record<string, string> = {}
-                reactions.forEach((reaction) => {
-                  newUserReactions[`review_${reaction.review_id}`] = reaction.reaction_type
-                })
-                setUserReactions((prev) => ({
-                  ...prev,
-                  ...newUserReactions,
-                }))
-              } else if (reactionsError) {
-                console.error("Error fetching review reactions:", reactionsError)
+                if (!reactionsError && reactions) {
+                  const newUserReactions: Record<string, string> = {}
+                  reactions.forEach((reaction) => {
+                    newUserReactions[`review_${reaction.review_id}`] = reaction.reaction_type
+                  })
+                  setUserReactions((prev) => ({
+                    ...prev,
+                    ...newUserReactions,
+                  }))
+                } else if (reactionsError) {
+                  console.error("Error fetching review reactions:", reactionsError)
+                }
+              } catch (error) {
+                console.error("Error processing review reactions:", error)
               }
             }
           }
@@ -104,6 +128,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (error) {
         console.error("Error fetching reviews:", error)
+        setReviews([])
       } finally {
         setIsLoading(false)
       }
@@ -156,21 +181,25 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         const userReactionsMap: Record<string, string> = {}
 
         if (currentUser) {
-          const { data: reactions, error: reactionsError } = await supabase
-            .from("comment_reactions")
-            .select("comment_id, reaction_type")
-            .eq("user_id", currentUser.id)
+          try {
+            const { data: reactions, error: reactionsError } = await supabase
+              .from("comment_reactions")
+              .select("comment_id, reaction_type")
+              .eq("user_id", currentUser.id)
 
-          if (!reactionsError && reactions) {
-            reactions.forEach((reaction) => {
-              userReactionsMap[`comment_${reaction.comment_id}`] = reaction.reaction_type
-            })
+            if (!reactionsError && reactions) {
+              reactions.forEach((reaction) => {
+                userReactionsMap[`comment_${reaction.comment_id}`] = reaction.reaction_type
+              })
 
-            // Update user reactions state
-            setUserReactions((prev) => ({
-              ...prev,
-              ...userReactionsMap,
-            }))
+              // Update user reactions state
+              setUserReactions((prev) => ({
+                ...prev,
+                ...userReactionsMap,
+              }))
+            }
+          } catch (error) {
+            console.error("Error fetching comment reactions:", error)
           }
         }
 
@@ -244,7 +273,11 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
       try {
         // Get display name from user_profiles or metadata
-        const authorName = getDisplayNameFromData(currentUser, userProfile)
+        const authorName =
+          currentUser.user_metadata?.full_name ||
+          currentUser.user_metadata?.name ||
+          userProfile?.display_name ||
+          "Anonymous"
 
         // Get avatar URL from user_profiles or metadata
         const authorAvatar = userProfile?.avatar_url || currentUser.user_metadata?.avatar_url || null
@@ -297,7 +330,11 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
       try {
         // Get display name from user_profiles or metadata
-        const authorName = getDisplayNameFromData(currentUser, userProfile)
+        const authorName =
+          currentUser.user_metadata?.full_name ||
+          currentUser.user_metadata?.name ||
+          userProfile?.display_name ||
+          "Anonymous"
 
         // Get avatar URL from user_profiles or metadata
         const authorAvatar = userProfile?.avatar_url || currentUser.user_metadata?.avatar_url || null
@@ -364,7 +401,11 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
       try {
         // Get display name from user_profiles or metadata
-        const authorName = getDisplayNameFromData(currentUser, userProfile)
+        const authorName =
+          currentUser.user_metadata?.full_name ||
+          currentUser.user_metadata?.name ||
+          userProfile?.display_name ||
+          "Anonymous"
 
         // Get avatar URL from user_profiles or metadata
         const authorAvatar = userProfile?.avatar_url || currentUser.user_metadata?.avatar_url || null
@@ -678,10 +719,10 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         // No need to revert optimistic update as it would cause a full re-render
       }
     },
-    [currentUser, userReactions],
+    [currentUser, userReactions, comments],
   )
 
-  const value = {
+  const value: ReviewsContextType = {
     reviews,
     comments,
     userReactions,

@@ -25,17 +25,26 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
 
   // Format date
   const formatDate = (dateString: string) => {
-    return formatDistanceToNow(new Date(dateString), { addSuffix: true })
+    try {
+      return formatDistanceToNow(new Date(dateString), { addSuffix: true })
+    } catch (error) {
+      console.error("Error formatting date:", error)
+      return "recently"
+    }
   }
 
-  // Get initials for avatar fallback
-  const getInitials = (name: string) => {
-    return name
-      .split(" ")
-      .map((part) => part[0])
-      .join("")
-      .toUpperCase()
-      .substring(0, 2)
+  // Get initials for avatar fallback - FIXED to handle non-string inputs
+  const getInitials = (name: string | null | undefined): string => {
+    if (!name || typeof name !== "string") return "AN"
+
+    return (
+      name
+        .split(" ")
+        .map((part) => part[0] || "")
+        .join("")
+        .toUpperCase()
+        .substring(0, 2) || "AN"
+    )
   }
 
   // Handle reply submission
@@ -74,7 +83,7 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
     <div className="space-y-3">
       <div className="flex items-start gap-2">
         <Avatar className="h-7 w-7 border shadow-sm">
-          <AvatarImage src={comment.author_avatar || "/placeholder.svg"} alt={comment.author_name} />
+          <AvatarImage src={comment.author_avatar || "/placeholder.svg"} alt={comment.author_name || "Anonymous"} />
           <AvatarFallback className="bg-primary/10 text-primary text-xs">
             {getInitials(comment.author_name)}
           </AvatarFallback>
@@ -83,12 +92,12 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
         <div className="flex-1 space-y-1">
           <div className="bg-muted/50 rounded-2xl px-3 py-2">
             <div className="flex items-center justify-between">
-              <h5 className="font-medium text-sm">{comment.author_name}</h5>
+              <h5 className="font-medium text-sm">{comment.author_name || "Anonymous"}</h5>
               <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100">
                 <MoreHorizontal className="h-3.5 w-3.5" />
               </Button>
             </div>
-            <p className="text-sm">{comment.content}</p>
+            <p className="text-sm">{comment.content || ""}</p>
           </div>
 
           <div className="flex items-center gap-3 px-3">
@@ -132,7 +141,7 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
               <Textarea
                 value={replyContent}
                 onChange={(e) => setReplyContent(e.target.value)}
-                placeholder={`Reply to ${comment.author_name}...`}
+                placeholder={`Reply to ${comment.author_name || "Anonymous"}...`}
                 className="min-h-[60px] pr-10 resize-none text-sm rounded-xl py-2 bg-muted/30"
                 disabled={isSubmitting}
               />

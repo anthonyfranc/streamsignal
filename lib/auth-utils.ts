@@ -74,7 +74,7 @@ export function getDisplayNameFromData(user: any, userProfile: any): string {
 
   // If no name is found, try to use the email
   const email = user.email
-  if (email) {
+  if (email && typeof email === "string") {
     // Return the part before the @ symbol
     return email.split("@")[0]
   }

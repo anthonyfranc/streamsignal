@@ -13,7 +13,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { ReviewCommentsSection } from "./review-comments-section"
 import { AuthButton } from "@/components/auth/auth-button"
-import { getUserDisplayName } from "@/lib/auth-utils"
+import { getDisplayNameFromData } from "@/lib/auth-utils"
 import { cn } from "@/lib/utils"
 import { ReviewsProvider, useReviews } from "@/contexts/reviews-context"
 
@@ -31,7 +31,8 @@ export function ServiceReviews({ serviceId }: ServiceReviewsProps) {
 }
 
 function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
-  const { reviews, isLoading, currentUser, fetchReviews, submitReview, reactToReview, userReactions } = useReviews()
+  const { reviews, isLoading, currentUser, userProfile, fetchReviews, submitReview, reactToReview, userReactions } =
+    useReviews()
   const [reviewFilter, setReviewFilter] = useState("all")
   const [userDisplayName, setUserDisplayName] = useState<string>("Anonymous")
 
@@ -69,9 +70,15 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
   // Update user display name when currentUser changes
   useEffect(() => {
     if (currentUser) {
-      setUserDisplayName(getUserDisplayName(currentUser))
+      try {
+        const displayName = getDisplayNameFromData(currentUser, userProfile)
+        setUserDisplayName(displayName || "Anonymous")
+      } catch (error) {
+        console.error("Error setting user display name:", error)
+        setUserDisplayName("Anonymous")
+      }
     }
-  }, [currentUser])
+  }, [currentUser, userProfile])
 
   // Filter reviews based on selected filter
   const filteredReviews = reviews.filter((review) => {
@@ -157,19 +164,28 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
     await reactToReview(reviewId, reactionType)
   }
 
-  // Get initials for avatar fallback
-  const getInitials = (name: string) => {
-    return name
-      .split(" ")
-      .map((part) => part[0])
-      .join("")
-      .toUpperCase()
-      .substring(0, 2)
+  // Get initials for avatar fallback - FIXED to handle non-string inputs
+  const getInitials = (name: string | null | undefined): string => {
+    if (!name || typeof name !== "string") return "AN"
+
+    return (
+      name
+        .split(" ")
+        .map((part) => part[0] || "")
+        .join("")
+        .toUpperCase()
+        .substring(0, 2) || "AN"
+    )
   }
 
   // Format date
   const formatDate = (dateString: string) => {
-    return formatDistanceToNow(new Date(dateString), { addSuffix: true })
+    try {
+      return formatDistanceToNow(new Date(dateString), { addSuffix: true })
+    } catch (error) {
+      console.error("Error formatting date:", error)
+      return "recently"
+    }
   }
 
   // Add this function to check if the user has reacted to a review
@@ -430,7 +446,10 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
               <div className="p-4 sm:p-5">
                 <div className="flex items-start gap-3">
                   <Avatar className="h-10 w-10 border shadow-sm">
-                    <AvatarImage src={review.author_avatar || "/placeholder.svg"} alt={review.author_name} />
+                    <AvatarImage
+                      src={review.author_avatar || "/placeholder.svg"}
+                      alt={review.author_name || "Anonymous"}
+                    />
                     <AvatarFallback className="bg-primary/10 text-primary">
                       {getInitials(review.author_name)}
                     </AvatarFallback>
@@ -440,7 +459,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
                     <div className="flex items-start justify-between">
                       <div>
                         <div className="flex items-center gap-2">
-                          <h4 className="font-semibold">{review.author_name}</h4>
+                          <h4 className="font-semibold">{review.author_name || "Anonymous"}</h4>
                           <div className="flex">
                             {[1, 2, 3, 4, 5].map((star) => (
                               <Star
@@ -469,7 +488,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
                     <h5 className="font-medium mt-2 text-lg">{review.title}</h5>
 
                     <div className="mt-1.5">
-                      {review.content.length > 200 && !expandedReviews[review.id] ? (
+                      {review.content && review.content.length > 200 && !expandedReviews[review.id] ? (
                         <>
                           <p className="text-sm leading-relaxed">{review.content.substring(0, 200)}...</p>
                           <button
@@ -482,7 +501,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
                       ) : (
                         <>
                           <p className="text-sm leading-relaxed">{review.content}</p>
-                          {review.content.length > 200 && (
+                          {review.content && review.content.length > 200 && (
                             <button
                               className="text-sm text-primary hover:text-primary/80 font-medium mt-1"
                               onClick={() => toggleReviewExpansion(review.id)}
@@ -625,5 +644,3 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
     </div>
   )
 }
-
-// Make sure ServiceReviewsWrapper is not exported anymore since we're directly exporting ServiceReviews
