@@ -20,11 +20,8 @@ import { motion, AnimatePresence } from "framer-motion"
 import { ReviewItem } from "./review-item"
 import { supabase } from "@/lib/supabase"
 import type { Review, Reply } from "@/types/reviews"
-import { useSupabaseRealtime } from "@/hooks/use-supabase-realtime"
+import { useReviewChannels } from "@/hooks/use-review-channels"
 import { ReviewSkeleton } from "./review-skeleton"
-
-// Add an isVisible prop to the component to track when it's actually visible
-// This will allow us to control when subscriptions are active
 
 // Update the component signature to accept the isVisible prop
 export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: number; isVisible?: boolean }) {
@@ -50,79 +47,312 @@ export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: num
   const [reviewTitle, setReviewTitle] = useState("")
   const [reviewContent, setReviewContent] = useState("")
 
-  // Set up real-time subscription for reviews
-  useSupabaseRealtime<Review>(
-    "service_reviews",
-    "*",
-    { column: "service_id", value: serviceId },
-    async (payload) => {
-      if (payload.new && payload.new.status === "approved") {
-        // For new reviews, fetch the user profile
-        if (payload.eventType === "INSERT") {
-          const review = payload.new
+  // Track when the component is actually visible in the viewport
+  const reviewsContainerRef = useRef<HTMLDivElement>(null)
+  const [isInViewport, setIsInViewport] = useState(false)
 
-          // Check if this is our own review that we've already added optimistically
-          const existingReview = reviews.find((r) => r.id === review.id)
-          if (existingReview) {
-            console.log("Ignoring realtime update for already displayed review:", review.id)
-            return
-          }
+  // Set up intersection observer to detect when the component is visible
+  useEffect(() => {
+    if (!reviewsContainerRef.current) return
 
-          const reviewWithProfile = { ...review, user_profile: { avatar_url: null } }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const [entry] = entries
+        setIsInViewport(entry.isIntersecting)
+      },
+      {
+        root: null,
+        rootMargin: "0px",
+        threshold: 0.1, // Consider visible when 10% is in viewport
+      },
+    )
 
-          try {
-            if (review.user_id) {
-              const { data: profileData, error } = await supabase
-                .from("user_profiles")
-                .select("avatar_url")
-                .eq("id", review.user_id)
-                .single()
+    observer.observe(reviewsContainerRef.current)
 
-              if (profileData && !error) {
-                reviewWithProfile.user_profile = profileData
-              }
+    return () => {
+      observer.disconnect()
+    }
+  }, [])
+
+  // Combine the prop-based visibility with the viewport visibility
+  const effectiveVisibility = isVisible && isInViewport
+
+  // Set up centralized channel management
+  const channelManager = useReviewChannels(
+    serviceId,
+    {
+      onReviewChange: async (payload) => {
+        if (payload.new && payload.new.status === "approved") {
+          // For new reviews, fetch the user profile
+          if (payload.eventType === "INSERT") {
+            const review = payload.new
+
+            // Check if this is our own review that we've already added optimistically
+            const existingReview = reviews.find((r) => r.id === review.id)
+            if (existingReview) {
+              console.log("Ignoring realtime update for already displayed review:", review.id)
+              return
             }
-          } catch (error) {
-            console.error("Error fetching user profile:", error)
+
+            const reviewWithProfile = { ...review, user_profile: { avatar_url: null } }
+
+            try {
+              if (review.user_id) {
+                const { data: profileData, error } = await supabase
+                  .from("user_profiles")
+                  .select("avatar_url")
+                  .eq("id", review.user_id)
+                  .single()
+
+                if (profileData && !error) {
+                  reviewWithProfile.user_profile = profileData
+                }
+              }
+            } catch (error) {
+              console.error("Error fetching user profile:", error)
+            }
+
+            // Mark this as the newest review for animation
+            setNewReviewId(review.id)
+
+            // Add the new review to the state
+            setReviews((prev) => [reviewWithProfile, ...prev])
+
+            // Initialize empty replies for this review
+            setReplies((prev) => ({ ...prev, [review.id]: [] }))
+
+            // Clear the new review ID after animation
+            setTimeout(() => {
+              setNewReviewId(null)
+            }, 3000)
+          }
+          // For updated reviews, update the local state
+          else if (payload.eventType === "UPDATE") {
+            setReviews((prev) =>
+              prev.map((review) =>
+                review.id === payload.new.id
+                  ? { ...review, ...payload.new, user_profile: review.user_profile }
+                  : review,
+              ),
+            )
+          }
+          // For deleted reviews, remove from local state
+          else if (payload.eventType === "DELETE" && payload.old) {
+            setReviews((prev) => prev.filter((review) => review.id !== payload.old.id))
+
+            // Also remove any replies for this review
+            setReplies((prev) => {
+              const newReplies = { ...prev }
+              delete newReplies[payload.old.id]
+              return newReplies
+            })
+          }
+        }
+      },
+      onReplyChange: async (payload) => {
+        if (payload.new && (payload.new as any).status === "approved") {
+          // For new replies, fetch the user profile
+          if (payload.eventType === "INSERT") {
+            const reply = payload.new
+            const reviewId = reply.review_id
+
+            // This is a genuinely new reply from someone else
+            const replyWithProfile = { ...reply, user_profile: { avatar_url: null }, replies: [] }
+
+            try {
+              if (reply.user_id) {
+                const { data: profileData } = await supabase
+                  .from("user_profiles")
+                  .select("avatar_url")
+                  .eq("id", reply.user_id)
+                  .single()
+
+                if (profileData) {
+                  replyWithProfile.user_profile = profileData
+                }
+              }
+            } catch (error) {
+              console.error("Error fetching user profile:", error)
+            }
+
+            // Update the replies state based on parent_id
+            setReplies((prev) => {
+              const reviewReplies = prev[reviewId] || []
+
+              // If this is a top-level reply
+              if (reply.parent_id === null) {
+                return {
+                  ...prev,
+                  [reviewId]: [...reviewReplies, replyWithProfile],
+                }
+              }
+              // If this is a nested reply
+              else {
+                // Helper function to add a nested reply
+                const addNestedReply = (replies: Reply[], parentId: number, newReply: Reply): Reply[] => {
+                  return replies.map((r) => {
+                    if (r.id === parentId) {
+                      return {
+                        ...r,
+                        replies: [...(r.replies || []), newReply],
+                      }
+                    } else if (r.replies && r.replies.length > 0) {
+                      return {
+                        ...r,
+                        replies: addNestedReply(r.replies, parentId, newReply),
+                      }
+                    }
+                    return r
+                  })
+                }
+
+                return {
+                  ...prev,
+                  [reviewId]: addNestedReply(reviewReplies, reply.parent_id, replyWithProfile),
+                }
+              }
+            })
+          }
+          // For updated replies, update the local state
+          else if (payload.eventType === "UPDATE") {
+            const reply = payload.new
+            const reviewId = reply.review_id
+
+            setReplies((prev) => {
+              const reviewReplies = prev[reviewId] || []
+
+              // Helper function to update a reply in the thread
+              const updateReplyInThread = (replies: Reply[], replyId: number, updatedReply: Reply): Reply[] => {
+                return replies.map((r) => {
+                  if (r.id === replyId) {
+                    return { ...r, ...updatedReply, replies: r.replies }
+                  } else if (r.replies && r.replies.length > 0) {
+                    return {
+                      ...r,
+                      replies: updateReplyInThread(r.replies, replyId, updatedReply),
+                    }
+                  }
+                  return r
+                })
+              }
+
+              return {
+                ...prev,
+                [reviewId]: updateReplyInThread(reviewReplies, reply.id, reply),
+              }
+            })
+          }
+          // For deleted replies, remove from local state
+          else if (payload.eventType === "DELETE" && payload.old) {
+            const reply = payload.old
+            const reviewId = reply.review_id
+
+            setReplies((prev) => {
+              const reviewReplies = prev[reviewId] || []
+
+              // Helper function to remove a reply from the thread
+              const removeReplyFromThread = (replies: Reply[], replyId: number): Reply[] => {
+                return replies.filter((r) => {
+                  if (r.id === replyId) {
+                    return false
+                  }
+                  if (r.replies && r.replies.length > 0) {
+                    r.replies = removeReplyFromThread(r.replies, replyId)
+                  }
+                  return true
+                })
+              }
+
+              return {
+                ...prev,
+                [reviewId]: removeReplyFromThread(reviewReplies, reply.id),
+              }
+            })
+          }
+        }
+      },
+      onVoteChange: (payload) => {
+        // When votes change, update the corresponding review or reply
+        if (payload.eventType === "INSERT" || payload.eventType === "DELETE") {
+          // Determine if this is a review vote or reply vote
+          const voteData = payload.new || payload.old
+
+          if (voteData.review_id && !voteData.reply_id) {
+            // This is a review vote - fetch updated counts
+            fetchReviewVoteCounts(voteData.review_id)
+          } else if (voteData.reply_id) {
+            // This is a reply vote - fetch updated counts
+            fetchReplyVoteCounts(voteData.reply_id)
+          }
+        }
+      },
+    },
+    effectiveVisibility,
+  )
+
+  // Fetch vote counts for a specific review
+  const fetchReviewVoteCounts = async (reviewId: number) => {
+    try {
+      const { data, error } = await supabase
+        .from("service_reviews")
+        .select("likes, dislikes")
+        .eq("id", reviewId)
+        .single()
+
+      if (data && !error) {
+        // Update the review's vote counts
+        setReviews((prev) =>
+          prev.map((review) =>
+            review.id === reviewId ? { ...review, likes: data.likes, dislikes: data.dislikes } : review,
+          ),
+        )
+      }
+    } catch (error) {
+      console.error("Error fetching review vote counts:", error)
+    }
+  }
+
+  // Fetch vote counts for a specific reply
+  const fetchReplyVoteCounts = async (replyId: number) => {
+    try {
+      const { data, error } = await supabase
+        .from("review_replies")
+        .select("likes, dislikes, review_id")
+        .eq("id", replyId)
+        .single()
+
+      if (data && !error) {
+        // Update the reply's vote counts
+        setReplies((prev) => {
+          const reviewId = data.review_id
+          const reviewReplies = prev[reviewId] || []
+
+          // Helper function to update a reply's vote counts
+          const updateReplyVotes = (replies: Reply[], targetId: number, likes: number, dislikes: number): Reply[] => {
+            return replies.map((reply) => {
+              if (reply.id === targetId) {
+                return { ...reply, likes, dislikes }
+              }
+              if (reply.replies && reply.replies.length > 0) {
+                return {
+                  ...reply,
+                  replies: updateReplyVotes(reply.replies, targetId, likes, dislikes),
+                }
+              }
+              return reply
+            })
           }
 
-          // Mark this as the newest review for animation
-          setNewReviewId(review.id)
-
-          // Add the new review to the state
-          setReviews((prev) => [reviewWithProfile, ...prev])
-
-          // Initialize empty replies for this review
-          setReplies((prev) => ({ ...prev, [review.id]: [] }))
-
-          // Clear the new review ID after animation
-          setTimeout(() => {
-            setNewReviewId(null)
-          }, 3000)
-        }
-        // For updated reviews, update the local state
-        else if (payload.eventType === "UPDATE") {
-          setReviews((prev) =>
-            prev.map((review) =>
-              review.id === payload.new.id ? { ...review, ...payload.new, user_profile: review.user_profile } : review,
-            ),
-          )
-        }
-        // For deleted reviews, remove from local state
-        else if (payload.eventType === "DELETE" && payload.old) {
-          setReviews((prev) => prev.filter((review) => review.id !== payload.old.id))
-
-          // Also remove any replies for this review
-          setReplies((prev) => {
-            const newReplies = { ...prev }
-            delete newReplies[payload.old.id]
-            return newReplies
-          })
-        }
+          return {
+            ...prev,
+            [reviewId]: updateReplyVotes(reviewReplies, replyId, data.likes, data.dislikes),
+          }
+        })
       }
-    },
-    isVisible, // Pass the isVisible prop
-  )
+    } catch (error) {
+      console.error("Error fetching reply vote counts:", error)
+    }
+  }
 
   // Initial data fetch
   const fetchInitialData = useCallback(async () => {
@@ -167,6 +397,11 @@ export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: num
         }),
       )
 
+      // Register all review IDs with the channel manager
+      reviewsWithProfiles.forEach((review) => {
+        channelManager.addProcessedReviewId(review.id)
+      })
+
       setReviews(reviewsWithProfiles as Review[])
 
       // Fetch replies for each review with a delay between requests to avoid rate limiting
@@ -203,6 +438,11 @@ export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: num
               }
 
               if (repliesData && repliesData.length > 0) {
+                // Register all reply IDs with the channel manager
+                repliesData.forEach((reply) => {
+                  channelManager.addProcessedReplyId(reply.id)
+                })
+
                 // For each reply, fetch the user profile separately
                 const repliesWithProfiles = await Promise.all(
                   repliesData.map(async (reply) => {
@@ -277,7 +517,7 @@ export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: num
     } finally {
       setLoading(false)
     }
-  }, [serviceId])
+  }, [serviceId, channelManager])
 
   useEffect(() => {
     // Only fetch data when the component is visible and we haven't initialized yet
@@ -363,6 +603,9 @@ export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: num
                 avatar_url: user.user_metadata?.avatar_url || null,
               },
             }
+
+            // Register the new review ID with the channel manager
+            channelManager.addProcessedReviewId(newReview.id)
 
             // Add the new review to the state
             setReviews((prev) => [newReview, ...prev])
@@ -468,7 +711,7 @@ export function ServiceReviews({ serviceId, isVisible = true }: { serviceId: num
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" ref={reviewsContainerRef}>
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
         <Tabs defaultValue="all" value={reviewFilter} onValueChange={setReviewFilter} className="w-full sm:w-auto">
           <TabsList className="transition-all">
