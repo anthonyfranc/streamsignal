@@ -3,7 +3,7 @@
 import type React from "react"
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react"
 import { supabase } from "@/lib/supabase"
-import { getCurrentUser } from "@/lib/auth-utils"
+import { getCurrentUser, getDisplayNameFromData } from "@/lib/auth-utils"
 import type { ServiceReview, ReviewComment } from "@/types/reviews"
 
 type ReviewsContextType = {
@@ -12,6 +12,7 @@ type ReviewsContextType = {
   userReactions: Record<string, string>
   isLoading: boolean
   currentUser: any | null
+  userProfile: any | null
   fetchReviews: (serviceId: number) => Promise<void>
   fetchComments: (reviewId: number) => Promise<ReviewComment[]>
   submitReview: (formData: FormData) => Promise<{ success: boolean; error?: string }>
@@ -29,16 +30,24 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
   const [userReactions, setUserReactions] = useState<Record<string, string>>({})
   const [isLoading, setIsLoading] = useState(true)
   const [currentUser, setCurrentUser] = useState<any | null>(null)
+  const [userProfile, setUserProfile] = useState<any | null>(null)
 
   // Use refs to track if we've already fetched data
   const fetchedReviewsRef = useRef<Record<number, boolean>>({})
   const fetchedCommentsRef = useRef<Record<number, boolean>>({})
 
-  // Check current user
+  // Check current user and fetch profile
   useEffect(() => {
     const checkUser = async () => {
       const user = await getCurrentUser()
       setCurrentUser(user)
+
+      if (user) {
+        // Fetch user profile
+        const { data: profile } = await supabase.from("user_profiles").select("*").eq("user_id", user.id).single()
+
+        setUserProfile(profile)
+      }
     }
     checkUser()
   }, [])
@@ -234,13 +243,19 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       const valueRating = Number.parseFloat((formData.get("valueRating") as string) || "0")
 
       try {
+        // Get display name from user_profiles or metadata
+        const authorName = getDisplayNameFromData(currentUser, userProfile)
+
+        // Get avatar URL from user_profiles or metadata
+        const authorAvatar = userProfile?.avatar_url || currentUser.user_metadata?.avatar_url || null
+
         const { data, error } = await supabase
           .from("service_reviews")
           .insert({
             service_id: serviceId,
             user_id: currentUser.id,
-            author_name: currentUser.user_metadata?.full_name || "Anonymous",
-            author_avatar: currentUser.user_metadata?.avatar_url,
+            author_name: authorName,
+            author_avatar: authorAvatar,
             rating,
             title,
             content,
@@ -267,7 +282,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         return { success: false, error: "Failed to submit review" }
       }
     },
-    [currentUser],
+    [currentUser, userProfile],
   )
 
   // Submit a comment on a review
@@ -281,9 +296,11 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       const content = formData.get("content") as string
 
       try {
-        // Get user display name and avatar
-        const authorName = currentUser.user_metadata?.full_name || "Anonymous"
-        const authorAvatar = currentUser.user_metadata?.avatar_url || null
+        // Get display name from user_profiles or metadata
+        const authorName = getDisplayNameFromData(currentUser, userProfile)
+
+        // Get avatar URL from user_profiles or metadata
+        const authorAvatar = userProfile?.avatar_url || currentUser.user_metadata?.avatar_url || null
 
         const { data, error } = await supabase
           .from("review_comments")
@@ -326,7 +343,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         return { success: false, error: "Failed to submit comment" }
       }
     },
-    [currentUser],
+    [currentUser, userProfile],
   )
 
   // Submit a reply to a comment
@@ -346,14 +363,20 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       }
 
       try {
+        // Get display name from user_profiles or metadata
+        const authorName = getDisplayNameFromData(currentUser, userProfile)
+
+        // Get avatar URL from user_profiles or metadata
+        const authorAvatar = userProfile?.avatar_url || currentUser.user_metadata?.avatar_url || null
+
         const { data, error } = await supabase
           .from("review_comments")
           .insert({
             review_id: null,
             parent_comment_id: parentCommentId,
             user_id: currentUser.id,
-            author_name: currentUser.user_metadata?.full_name || "Anonymous",
-            author_avatar: currentUser.user_metadata?.avatar_url,
+            author_name: authorName,
+            author_avatar: authorAvatar,
             content,
             likes: 0,
             dislikes: 0,
@@ -429,7 +452,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         return { success: false, error: "Failed to submit reply" }
       }
     },
-    [currentUser, comments],
+    [currentUser, userProfile, comments],
   )
 
   // React to a review (like/dislike)
@@ -664,6 +687,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
     userReactions,
     isLoading,
     currentUser,
+    userProfile,
     fetchReviews,
     fetchComments,
     submitReview,

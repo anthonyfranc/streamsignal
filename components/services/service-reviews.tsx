@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { formatDistanceToNow } from "date-fns"
 import { Star, ThumbsUp, MessageSquare, MoreHorizontal } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -21,7 +21,8 @@ interface ServiceReviewsProps {
   serviceId: number
 }
 
-export function ServiceReviewsWrapper({ serviceId }: ServiceReviewsProps) {
+// Export the ServiceReviews component directly
+export function ServiceReviews({ serviceId }: ServiceReviewsProps) {
   return (
     <ReviewsProvider>
       <ServiceReviewsContent serviceId={serviceId} />
@@ -52,9 +53,13 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
   // Track if we've already fetched reviews
   const [hasFetchedReviews, setHasFetchedReviews] = useState(false)
 
+  // Use ref to track fetched reviews
+  const fetchedReviewsRef = useRef<Record<number, boolean>>({})
+
   // Fetch reviews only once when component mounts or when serviceId changes
   useEffect(() => {
-    if (!hasFetchedReviews) {
+    if (!hasFetchedReviews && !fetchedReviewsRef.current[serviceId]) {
+      fetchedReviewsRef.current[serviceId] = true
       fetchReviews(serviceId).then(() => {
         setHasFetchedReviews(true)
       })
@@ -621,5 +626,4 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
   )
 }
 
-// Export the wrapper component
-export { ServiceReviewsWrapper as ServiceReviews }
+// Make sure ServiceReviewsWrapper is not exported anymore since we're directly exporting ServiceReviews

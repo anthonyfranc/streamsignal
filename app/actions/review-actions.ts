@@ -23,10 +23,16 @@ export async function submitReview(formData: FormData) {
   const valueRating = Number.parseFloat((formData.get("valueRating") as string) || "0")
 
   // Get user display name using our helper function
-  const authorName = getUserDisplayName(user)
+  const authorName = await getUserDisplayName(user)
 
   // Get avatar URL from user metadata or profile
-  const authorAvatar = user.user_metadata?.avatar_url || user.profile?.avatar_url || null
+  const { data: userProfile } = await supabase
+    .from("user_profiles")
+    .select("avatar_url")
+    .eq("user_id", user.id)
+    .single()
+
+  const authorAvatar = userProfile?.avatar_url || user.user_metadata?.avatar_url || null
 
   console.log("Submitting review with author:", {
     userId: user.id,
@@ -81,10 +87,16 @@ export async function submitComment(formData: FormData) {
   const serviceId = Number.parseInt(formData.get("serviceId") as string)
 
   // Get user display name using our helper function
-  const authorName = getUserDisplayName(user)
+  const authorName = await getUserDisplayName(user)
 
-  // Get avatar URL from user metadata or profile
-  const authorAvatar = user.user_metadata?.avatar_url || user.profile?.avatar_url || null
+  // Get avatar URL from user profile
+  const { data: userProfile } = await supabase
+    .from("user_profiles")
+    .select("avatar_url")
+    .eq("user_id", user.id)
+    .single()
+
+  const authorAvatar = userProfile?.avatar_url || user.user_metadata?.avatar_url || null
 
   try {
     const { data, error } = await supabase
@@ -134,10 +146,16 @@ export async function submitReply(formData: FormData) {
   }
 
   // Get user display name using our helper function
-  const authorName = getUserDisplayName(user)
+  const authorName = await getUserDisplayName(user)
 
-  // Get avatar URL from user metadata or profile
-  const authorAvatar = user.user_metadata?.avatar_url || user.profile?.avatar_url || null
+  // Get avatar URL from user profile
+  const { data: userProfile } = await supabase
+    .from("user_profiles")
+    .select("avatar_url")
+    .eq("user_id", user.id)
+    .single()
+
+  const authorAvatar = userProfile?.avatar_url || user.user_metadata?.avatar_url || null
 
   try {
     const { data, error } = await supabase
