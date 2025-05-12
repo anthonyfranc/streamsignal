@@ -1,8 +1,7 @@
 "use server"
-
 import { revalidatePath } from "next/cache"
-import { createServerActionClient } from "@/lib/supabase-client-factory"
-import { verifyServerAuth } from "@/lib/server-auth"
+import { createServerClient } from "@/lib/supabase-server"
+import { cookies } from "next/headers"
 
 // Add a delay function for rate limiting
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -11,39 +10,22 @@ export async function submitVote(
   formData: FormData,
 ): Promise<{ success: boolean; message: string; requireAuth?: boolean }> {
   try {
-    // Add more detailed logging
-    console.log("Starting vote submission process...")
+    // Create a Supabase client with the cookies
+    const cookieStore = cookies()
+    const supabase = createServerClient(cookieStore)
 
-    // Get the user ID with better error handling
-    let userId
-    try {
-      userId = await verifyServerAuth()
-      console.log(`Auth verification result: ${userId ? "Success" : "Failed"}`)
-    } catch (authError) {
-      console.error("Authentication verification error:", authError)
-      return {
-        success: false,
-        message: "Authentication error. Please try logging in again.",
-        requireAuth: true,
-      }
-    }
+    // Check if user is authenticated
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
 
-    // Log authentication status for debugging
-    console.log(
-      `Server auth check result: ${userId ? "Authenticated as " + userId.substring(0, 8) + "..." : "Not authenticated"}`,
-    )
-
-    if (!userId) {
-      console.log("No user ID returned from auth verification")
+    if (!session) {
       return {
         success: false,
         message: "You must be logged in to vote",
         requireAuth: true,
       }
     }
-
-    // Create a Supabase client for server actions
-    const supabase = createServerActionClient()
 
     // Extract and validate data
     const reviewId = formData.get("reviewId") ? Number.parseInt(formData.get("reviewId") as string) : null
@@ -68,7 +50,7 @@ export async function submitVote(
       const response = await supabase
         .from("review_votes")
         .select("*")
-        .eq("user_id", userId)
+        .eq("user_id", session.user.id)
         .eq(reviewId ? "review_id" : "reply_id", reviewId || replyId)
         .is(reviewId ? "reply_id" : "review_id", null)
         .single()
@@ -84,7 +66,7 @@ export async function submitVote(
         const response = await supabase
           .from("review_votes")
           .select("*")
-          .eq("user_id", userId)
+          .eq("user_id", session.user.id)
           .eq(reviewId ? "review_id" : "reply_id", reviewId || replyId)
           .is(reviewId ? "reply_id" : "review_id", null)
           .single()
@@ -169,7 +151,7 @@ export async function submitVote(
         const { error: insertError } = await supabase.from("review_votes").insert({
           review_id: reviewId,
           reply_id: replyId,
-          user_id: userId,
+          user_id: session.user.id,
           vote_type: voteType,
         })
 
@@ -186,7 +168,7 @@ export async function submitVote(
           const { error: insertError } = await supabase.from("review_votes").insert({
             review_id: reviewId,
             reply_id: replyId,
-            user_id: userId,
+            user_id: session.user.id,
             vote_type: voteType,
           })
 

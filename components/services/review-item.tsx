@@ -371,11 +371,8 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
 
       if (data && !error) {
         // Update the review's vote counts
-        review.likes = data.likes || 0
-        review.dislikes = data.dislikes || 0
-
-        // Force a re-render to update the UI
-        setLocalReplies([...localReplies])
+        review.likes = data.likes
+        review.dislikes = data.dislikes
       }
     } catch (error) {
       console.error("Error fetching review vote counts:", error)
@@ -632,24 +629,18 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
   // Update the handleVote function to use throttling instead of debouncing
   const handleVote = useCallback(
     throttle((voteType: "like" | "dislike") => {
-      if (!user) {
-        setAuthModalOpen(true)
+      if (!user || isVoting) {
+        if (!user) setAuthModalOpen(true)
         return
       }
 
-      if (isVoting) return
-
       setIsVoting(true)
-
-      // Get current values for potential rollback
-      const currentLikes = review.likes || 0
-      const currentDislikes = review.dislikes || 0
 
       // Optimistically update UI
       if (voteType === "like") {
-        review.likes = currentLikes + 1
+        review.likes = (review.likes || 0) + 1
       } else {
-        review.dislikes = currentDislikes + 1
+        review.dislikes = (review.dislikes || 0) + 1
       }
 
       // Force a re-render
@@ -658,42 +649,20 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
       // Submit to server with a slight delay to prevent rate limiting
       setTimeout(async () => {
         try {
-          // Ensure we have a fresh session before submitting the vote
-          await refreshSession()
-
-          // Double-check authentication after refresh
-          const { data: authData } = await supabase.auth.getSession()
-          if (!authData.session) {
-            console.error("No session after refresh, cannot vote")
-            setAuthModalOpen(true)
-            throw new Error("Authentication required")
-          }
-
-          console.log("Submitting vote with auth token:", authData.session.access_token.substring(0, 10) + "...")
-
           const formData = new FormData()
           formData.append("reviewId", review.id.toString())
           formData.append("voteType", voteType)
           formData.append("serviceId", serviceId.toString())
 
-          const result = await submitVote(formData)
-
-          if (!result.success) {
-            if (result.requireAuth) {
-              // Session expired or not valid on server
-              console.error("Server reports auth required:", result.message)
-              setAuthModalOpen(true)
-            }
-            throw new Error(result.message || "Failed to submit vote")
-          }
-
-          // Fetch the latest vote counts to ensure UI is in sync
-          await fetchReviewVoteCounts()
+          await submitVote(formData)
         } catch (error) {
           console.error("Error submitting vote:", error)
           // Revert optimistic update on error
-          review.likes = currentLikes
-          review.dislikes = currentDislikes
+          if (voteType === "like") {
+            review.likes = Math.max(0, (review.likes || 0) - 1)
+          } else {
+            review.dislikes = Math.max(0, (review.dislikes || 0) - 1)
+          }
           // Force a re-render
           setLocalReplies([...localReplies])
         } finally {
@@ -701,23 +670,18 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
         }
       }, 300)
     }, 1000), // Throttle to one vote per second
-    [review.id, serviceId, isVoting, user, localReplies, refreshSession],
+    [review.id, serviceId, isVoting, user, localReplies],
   )
 
-  // Similarly update the handleReplyVote function
+  // Similarly update the handleReplyVote function to use throttling
   const handleReplyVote = useCallback(
     throttle((replyId: number, voteType: "like" | "dislike") => {
-      if (!user) {
-        setAuthModalOpen(true)
+      if (!user || isVoting) {
+        if (!user) setAuthModalOpen(true)
         return
       }
 
-      if (isVoting) return
-
       setIsVoting(true)
-
-      // Store the current state for potential rollback
-      const currentReplies = [...localReplies]
 
       // Find the reply and optimistically update it
       setLocalReplies((prev) => {
@@ -745,36 +709,42 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
       // Submit to server with a slight delay to prevent rate limiting
       setTimeout(async () => {
         try {
-          // Ensure we have a fresh session before submitting the vote
-          await refreshSession()
-
           const formData = new FormData()
           formData.append("replyId", replyId.toString())
           formData.append("voteType", voteType)
           formData.append("serviceId", serviceId.toString())
 
-          const result = await submitVote(formData)
-
-          if (!result.success) {
-            if (result.requireAuth) {
-              // Session expired or not valid on server
-              setAuthModalOpen(true)
-            }
-            throw new Error(result.message || "Failed to submit vote")
-          }
-
-          // We could fetch the latest vote counts here, but for replies
-          // we'll rely on the optimistic update for now
+          await submitVote(formData)
         } catch (error) {
           console.error("Error submitting reply vote:", error)
-          // Revert optimistic update on error by restoring the previous state
-          setLocalReplies(currentReplies)
+          // Revert optimistic update on error
+          setLocalReplies((prev) => {
+            const revertReplyVote = (replies: Reply[]): Reply[] => {
+              return replies.map((reply) => {
+                if (reply.id === replyId) {
+                  return {
+                    ...reply,
+                    likes: voteType === "like" ? Math.max(0, (reply.likes || 0) - 1) : reply.likes,
+                    dislikes: voteType === "dislike" ? Math.max(0, (reply.dislikes || 0) - 1) : reply.dislikes,
+                  }
+                }
+                if (reply.replies && reply.replies.length > 0) {
+                  return {
+                    ...reply,
+                    replies: revertReplyVote(reply.replies),
+                  }
+                }
+                return reply
+              })
+            }
+            return revertReplyVote(prev)
+          })
         } finally {
           setIsVoting(false)
         }
       }, 300)
     }, 1000), // Throttle to one vote per second
-    [serviceId, isVoting, user, localReplies, refreshSession],
+    [serviceId, isVoting, user],
   )
 
   const handleAuthSuccess = async () => {
@@ -1079,7 +1049,6 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                 )}
                 onClick={() => handleReplyVote(reply.id, "like")}
                 disabled={isVoting}
-                aria-label={user ? "Like this reply" : "Sign in to like this reply"}
               >
                 <ThumbsUp className="h-3 w-3" />
                 <span>{reply.likes > 0 ? reply.likes : "Like"}</span>
@@ -1091,7 +1060,6 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                 )}
                 onClick={() => handleReplyVote(reply.id, "dislike")}
                 disabled={isVoting}
-                aria-label={user ? "Dislike this reply" : "Sign in to dislike this reply"}
               >
                 <ThumbsDown className="h-3 w-3" />
                 <span>{reply.dislikes > 0 ? reply.dislikes : "Dislike"}</span>
@@ -1100,10 +1068,8 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                 <button
                   className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-900 transition-colors"
                   onClick={() => initiateReply(reply.id, reply.author_name)}
-                  aria-label={user ? "Reply" : "Sign in to reply"}
                 >
-                  <MessageSquare className="h-3 w-3" />
-                  <span>Reply</span>
+                  Reply
                 </button>
               )}
             </div>
@@ -1163,7 +1129,6 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                 )}
                 onClick={() => handleVote("like")}
                 disabled={isVoting}
-                aria-label={user ? "Like this review" : "Sign in to like this review"}
               >
                 <ThumbsUp className="h-3.5 w-3.5" />
                 <span>{review.likes > 0 ? review.likes : "Like"}</span>
@@ -1175,18 +1140,16 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                 )}
                 onClick={() => handleVote("dislike")}
                 disabled={isVoting}
-                aria-label={user ? "Dislike this review" : "Sign in to dislike this review"}
               >
                 <ThumbsDown className="h-3.5 w-3.5" />
                 <span>{review.dislikes > 0 ? review.dislikes : "Dislike"}</span>
               </button>
               <button
                 className="flex items-center gap-1 text-xs text-gray-500 transition-all duration-200 hover:text-gray-900 hover:scale-110"
-                onClick={() => initiateReply()}
-                aria-label={user ? "Reply to this review" : "Sign in to reply to this review"}
+                onClick={toggleReplies}
               >
-                <MessageSquare className="h-3.5 w-3.5" />
-                <span>Reply</span>
+                <ThumbsUp className="h-3.5 w-3.5" />
+                <span>{review.dislikes > 0 ? review.dislikes : "Dislike"}</span>
               </button>
               <button
                 className="flex items-center gap-1 text-xs text-gray-500 transition-all duration-200 hover:text-gray-900 hover:scale-110"
@@ -1196,7 +1159,7 @@ export function ReviewItem({ review, serviceId, replies: initialReplies, isVisib
                 <span>
                   {localReplies.length > 0
                     ? `${localReplies.length} ${localReplies.length === 1 ? "reply" : "replies"}`
-                    : "Show replies"}
+                    : "Reply"}
                 </span>
               </button>
             </div>

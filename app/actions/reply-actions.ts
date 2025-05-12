@@ -1,45 +1,29 @@
 "use server"
-
-import { revalidatePath } from "next/cache"
-import { createServerActionClient } from "@/lib/supabase-client-factory"
-import { verifyServerAuth } from "@/lib/server-auth"
+import { cookies } from "next/headers"
+import { createServerClient } from "@/lib/supabase-server"
 import type { Reply } from "@/types/reviews"
 
 export async function submitReviewReply(
   formData: FormData,
 ): Promise<{ success: boolean; message: string; requireAuth?: boolean; replyId?: number }> {
   try {
-    console.log("Starting reply submission process...")
+    // Create a Supabase client with the cookies
+    const cookieStore = cookies()
+    const supabase = createServerClient(cookieStore)
 
-    // Get the user ID with better error handling
-    let userId
-    try {
-      userId = await verifyServerAuth()
-      console.log(`Auth verification result: ${userId ? "Success" : "Failed"}`)
-    } catch (authError) {
-      console.error("Authentication verification error:", authError)
-      return {
-        success: false,
-        message: "Authentication error. Please try logging in again.",
-        requireAuth: true,
-      }
-    }
+    // Check if user is authenticated
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
 
-    if (!userId) {
-      console.log("No user ID returned from auth verification")
+    if (!session) {
+      console.error("No session found in server action")
       return {
         success: false,
         message: "You must be logged in to submit a reply",
         requireAuth: true,
       }
     }
-
-    // Create a Supabase client for server actions
-    const supabase = createServerActionClient()
-
-    // Get user's session to access metadata
-    const { data: userData } = await supabase.auth.getUser()
-    const user = userData?.user
 
     // Extract and validate data
     const reviewId = Number.parseInt(formData.get("reviewId") as string)
@@ -48,17 +32,21 @@ export async function submitReviewReply(
     const parentId = formData.get("parentId") ? Number.parseInt(formData.get("parentId") as string) : null
 
     // Get user's name from their profile
-    let authorName = user?.user_metadata?.full_name || user?.user_metadata?.name || ""
+    let authorName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || ""
 
     // If no name is found in metadata, try to get it from user_profiles
     if (!authorName) {
-      const { data: profileData } = await supabase.from("user_profiles").select("full_name").eq("id", userId).single()
+      const { data: profileData } = await supabase
+        .from("user_profiles")
+        .select("full_name")
+        .eq("id", session.user.id)
+        .single()
 
       if (profileData && profileData.full_name) {
         authorName = profileData.full_name
       } else {
         // Fallback to email username if no name is found
-        authorName = user?.email?.split("@")[0] || "User"
+        authorName = session.user.email?.split("@")[0] || "User"
       }
     }
 
@@ -94,7 +82,7 @@ export async function submitReviewReply(
       .insert({
         review_id: reviewId,
         parent_id: parentId,
-        user_id: userId,
+        user_id: session.user.id,
         author_name: authorName,
         content,
         likes: 0,
@@ -110,11 +98,6 @@ export async function submitReviewReply(
         success: false,
         message: "Failed to submit reply. Please try again.",
       }
-    }
-
-    // Revalidate the service page
-    if (serviceId && !isNaN(serviceId)) {
-      revalidatePath(`/services/${serviceId}`)
     }
 
     return {
@@ -133,7 +116,8 @@ export async function submitReviewReply(
 
 export async function getReviewReplies(reviewId: number): Promise<Reply[]> {
   try {
-    const supabase = createServerActionClient()
+    const cookieStore = cookies()
+    const supabase = createServerClient(cookieStore)
 
     // Fetch all approved replies for this review
     const { data, error } = await supabase

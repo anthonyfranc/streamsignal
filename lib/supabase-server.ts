@@ -1,9 +1,9 @@
-import { createServerClient as createSupabaseServerClient } from "@supabase/ssr"
-import { cookies } from "next/headers"
+import { createClient } from "@supabase/supabase-js"
+import type { cookies } from "next/headers"
 import type { Database } from "@/types/database"
 
 // Create a Supabase client configured to use cookies for authentication.
-export function createServerClient(cookieStore = cookies()) {
+export function createServerClient(cookieStore?: ReturnType<typeof cookies>) {
   // Ensure we have the required environment variables
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -16,34 +16,46 @@ export function createServerClient(cookieStore = cookies()) {
     throw new Error("NEXT_PUBLIC_SUPABASE_ANON_KEY is required but not provided")
   }
 
-  return createSupabaseServerClient<Database>(supabaseUrl, supabaseKey, {
-    cookies: {
-      get(name: string) {
-        const cookie = cookieStore.get(name)
-        return cookie?.value
+  // If cookieStore is provided, use it for authentication
+  if (cookieStore) {
+    return createClient<Database>(supabaseUrl, supabaseKey, {
+      cookies: {
+        get(name: string) {
+          const cookie = cookieStore.get(name)
+          return cookie?.value
+        },
+        set(name: string, value: string, options: any) {
+          try {
+            cookieStore.set({ name, value, ...options })
+          } catch (error) {
+            console.error("Error setting cookie:", error)
+          }
+        },
+        remove(name: string, options: any) {
+          try {
+            cookieStore.delete({ name, ...options })
+          } catch (error) {
+            console.error("Error removing cookie:", error)
+          }
+        },
       },
-      set(name: string, value: string, options: any) {
-        try {
-          cookieStore.set({ name, value, ...options })
-        } catch (error) {
-          // This will throw in Server Components because they cannot set cookies directly
-          // The middleware will handle setting cookies instead
-          console.error("Error setting cookie:", error)
-        }
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
       },
-      remove(name: string, options: any) {
-        try {
-          cookieStore.delete({ name, ...options })
-        } catch (error) {
-          // This will throw in Server Components
-          console.error("Error removing cookie:", error)
-        }
-      },
+    })
+  }
+
+  // Otherwise, create a client without cookie handling
+  return createClient<Database>(supabaseUrl, supabaseKey, {
+    auth: {
+      persistSession: false,
     },
   })
 }
 
-// For convenience in server components that don't need cookie handling
+// Create a simple Supabase client for server components
+// This maintains backward compatibility with existing code
 export function getSupabase() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -56,13 +68,7 @@ export function getSupabase() {
     throw new Error("NEXT_PUBLIC_SUPABASE_ANON_KEY is required but not provided")
   }
 
-  return createSupabaseServerClient<Database>(supabaseUrl, supabaseKey, {
-    cookies: {
-      get: () => undefined,
-      set: () => {},
-      remove: () => {},
-    },
-  })
+  return createClient(supabaseUrl, supabaseKey)
 }
 
 // Export a pre-initialized server-side client for convenience
