@@ -40,26 +40,52 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   // Fetch reviews for a service
-  const fetchReviews = useCallback(async (serviceId: number) => {
-    setIsLoading(true)
-    try {
-      const { data, error } = await supabase
-        .from("service_reviews")
-        .select("*")
-        .eq("service_id", serviceId)
-        .order("created_at", { ascending: false })
+  const fetchReviews = useCallback(
+    async (serviceId: number) => {
+      setIsLoading(true)
+      try {
+        const { data, error } = await supabase
+          .from("service_reviews")
+          .select("*")
+          .eq("service_id", serviceId)
+          .order("created_at", { ascending: false })
 
-      if (error) {
+        if (error) {
+          console.error("Error fetching reviews:", error)
+        } else {
+          setReviews(data || [])
+
+          // If user is logged in, fetch their reactions to these reviews
+          if (currentUser) {
+            const reviewIds = data?.map((review) => review.id) || []
+
+            if (reviewIds.length > 0) {
+              const { data: reactions, error: reactionsError } = await supabase
+                .from("review_reactions")
+                .select("review_id, reaction_type")
+                .eq("user_id", currentUser.id)
+                .in("review_id", reviewIds)
+
+              if (!reactionsError && reactions) {
+                const newUserReactions = { ...userReactions }
+                reactions.forEach((reaction) => {
+                  newUserReactions[`review_${reaction.review_id}`] = reaction.reaction_type
+                })
+                setUserReactions(newUserReactions)
+              } else if (reactionsError) {
+                console.error("Error fetching review reactions:", reactionsError)
+              }
+            }
+          }
+        }
+      } catch (error) {
         console.error("Error fetching reviews:", error)
-      } else {
-        setReviews(data || [])
+      } finally {
+        setIsLoading(false)
       }
-    } catch (error) {
-      console.error("Error fetching reviews:", error)
-    } finally {
-      setIsLoading(false)
-    }
-  }, [])
+    },
+    [currentUser, userReactions],
+  )
 
   // Fetch comments for a review
   const fetchComments = useCallback(

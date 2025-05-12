@@ -30,7 +30,7 @@ export function ServiceReviewsWrapper({ serviceId }: ServiceReviewsProps) {
 }
 
 function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
-  const { reviews, isLoading, currentUser, fetchReviews, submitReview, reactToReview } = useReviews()
+  const { reviews, isLoading, currentUser, fetchReviews, submitReview, reactToReview, userReactions } = useReviews()
   const [reviewFilter, setReviewFilter] = useState("all")
   const [userDisplayName, setUserDisplayName] = useState<string>("Anonymous")
 
@@ -158,6 +158,11 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
   // Format date
   const formatDate = (dateString: string) => {
     return formatDistanceToNow(new Date(dateString), { addSuffix: true })
+  }
+
+  // Add this function to check if the user has reacted to a review
+  const getUserReactionToReview = (reviewId: number) => {
+    return userReactions[`review_${reviewId}`] || null
   }
 
   return (
@@ -567,10 +572,17 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
 
                     <div className="flex items-center gap-4 mt-4">
                       <button
-                        className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-primary transition-colors"
+                        className={cn(
+                          "flex items-center gap-1.5 text-sm transition-colors",
+                          getUserReactionToReview(review.id) === "like"
+                            ? "text-primary font-medium"
+                            : "text-muted-foreground hover:text-primary",
+                        )}
                         onClick={() => handleReviewReaction(review.id, "like")}
                       >
-                        <ThumbsUp className="h-4 w-4" />
+                        <ThumbsUp
+                          className={cn("h-4 w-4", getUserReactionToReview(review.id) === "like" && "fill-primary")}
+                        />
                         <span>Helpful{review.likes > 0 && ` (${review.likes})`}</span>
                       </button>
                       <button
