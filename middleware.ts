@@ -1,7 +1,16 @@
-import { type NextRequest, NextResponse } from "next/server"
+import { NextResponse } from "next/server"
+import type { NextRequest } from "next/server"
+import { createMiddlewareClient } from "@supabase/auth-helpers-nextjs"
+import type { Database } from "@/types/database"
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const response = NextResponse.next()
+
+  // Create a Supabase client configured to use cookies
+  const supabase = createMiddlewareClient<Database>({ req: request, res: response })
+
+  // Refresh session if expired - required for Server Components
+  await supabase.auth.getSession()
 
   // Skip cache headers for API routes and static files
   if (
@@ -45,7 +54,7 @@ export const config = {
   matcher: [
     // Match all paths except for:
     // - API routes
-    // - Static files (images, etc)
+    // - Static files
     // - Next.js internals
     "/((?!api|_next/static|_next/image|favicon.ico).*)",
   ],

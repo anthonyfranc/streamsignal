@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { AlertCircle } from "lucide-react"
+import { useRouter } from "next/navigation"
 
 interface SignUpFormProps {
   onSuccess?: () => void
@@ -17,6 +18,7 @@ interface SignUpFormProps {
 
 export function SignUpForm({ onSuccess, redirectAfterAuth = false }: SignUpFormProps) {
   const { signUp } = useAuth()
+  const router = useRouter()
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [name, setName] = useState("")
@@ -35,6 +37,8 @@ export function SignUpForm({ onSuccess, redirectAfterAuth = false }: SignUpFormP
         setError(error.message)
       } else {
         if (onSuccess) onSuccess()
+        if (redirectAfterAuth) router.push("/")
+        router.refresh()
       }
     } catch (err) {
       setError("An unexpected error occurred. Please try again.")

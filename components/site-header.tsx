@@ -1,42 +1,49 @@
 "use client"
 
 import Link from "next/link"
-import { usePathname } from "next/navigation"
+import { useAuth } from "@/contexts/auth-provider"
 import { Button } from "@/components/ui/button"
-import { MegaMenu } from "@/components/mega-menu"
-import { UserAvatar } from "@/components/auth/user-avatar"
-import { useAuth } from "@/contexts/auth-context"
 import { useState } from "react"
 import { AuthModal } from "@/components/auth/auth-modal"
+import { UserAvatar } from "@/components/auth/user-avatar"
 
 export function SiteHeader() {
-  const pathname = usePathname()
   const { user } = useAuth()
-  const [authModalOpen, setAuthModalOpen] = useState(false)
-
-  // Don't show header on admin pages
-  if (pathname?.startsWith("/admin")) {
-    return null
-  }
+  const [showAuthModal, setShowAuthModal] = useState(false)
 
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="container flex h-16 items-center">
-        <Link href="/" className="mr-6 flex items-center space-x-2">
-          <span className="font-bold">StreamSignal</span>
-        </Link>
-        <MegaMenu />
-        <div className="ml-auto flex items-center space-x-4">
-          {user ? (
-            <UserAvatar />
-          ) : (
-            <Button variant="outline" onClick={() => setAuthModalOpen(true)}>
-              Sign In
-            </Button>
-          )}
-          <AuthModal isOpen={authModalOpen} onClose={() => setAuthModalOpen(false)} />
+      <div className="container flex h-14 items-center">
+        <div className="mr-4 flex">
+          <Link href="/" className="flex items-center space-x-2">
+            <span className="font-bold">StreamSignal</span>
+          </Link>
+        </div>
+        <div className="flex flex-1 items-center justify-between space-x-2 md:justify-end">
+          <nav className="flex items-center space-x-4">
+            <Link href="/services" className="text-sm font-medium">
+              Services
+            </Link>
+            <Link href="/channels" className="text-sm font-medium">
+              Channels
+            </Link>
+            <Link href="/recommendations" className="text-sm font-medium">
+              Recommendations
+            </Link>
+          </nav>
+          <div className="flex items-center space-x-2">
+            {user ? (
+              <UserAvatar user={user} />
+            ) : (
+              <Button variant="outline" onClick={() => setShowAuthModal(true)}>
+                Sign In
+              </Button>
+            )}
+          </div>
         </div>
       </div>
+
+      <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} />
     </header>
   )
 }

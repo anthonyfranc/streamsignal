@@ -1,43 +1,39 @@
 "use client"
 
-import type React from "react"
-
 import { useState } from "react"
-import { useAuth } from "@/contexts/auth-context"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { AlertCircle, ArrowLeft } from "lucide-react"
+import { AlertCircle } from "lucide-react"
+import { resetPassword } from "@/app/actions/auth-actions"
 
 interface ForgotPasswordFormProps {
-  onBack: () => void
+  onSuccess?: () => void
+  onCancel?: () => void
 }
 
-export function ForgotPasswordForm({ onBack }: ForgotPasswordFormProps) {
-  const { resetPassword } = useAuth()
+export function ForgotPasswordForm({ onSuccess, onCancel }: ForgotPasswordFormProps) {
   const [isLoading, setIsLoading] = useState(false)
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null)
-  const [email, setEmail] = useState("")
+  const [error, setError] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const handleSubmit = async (formData: FormData) => {
     setIsLoading(true)
+    setError(null)
     setMessage(null)
 
     try {
-      const { error } = await resetPassword(email)
+      const result = await resetPassword(formData)
 
-      if (error) {
-        setMessage({ type: "error", text: error.message })
+      if (result.error) {
+        setError(result.error)
       } else {
-        setMessage({
-          type: "success",
-          text: "Password reset instructions have been sent to your email.",
-        })
+        setMessage(result.message || "Check your email for the password reset link.")
+        if (onSuccess) onSuccess()
       }
     } catch (err) {
-      setMessage({ type: "error", text: "An unexpected error occurred. Please try again." })
+      setError("An unexpected error occurred. Please try again.")
       console.error(err)
     } finally {
       setIsLoading(false)
@@ -45,36 +41,35 @@ export function ForgotPasswordForm({ onBack }: ForgotPasswordFormProps) {
   }
 
   return (
-    <div className="space-y-4 py-2">
-      <Button type="button" variant="ghost" size="sm" className="flex items-center gap-1 mb-2 -ml-2" onClick={onBack}>
-        <ArrowLeft className="h-4 w-4" />
-        Back to login
-      </Button>
-
-      {message && (
-        <Alert className={message.type === "success" ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}>
+    <form action={handleSubmit} className="space-y-4 py-2">
+      {error && (
+        <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{message.text}</AlertDescription>
+          <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="space-y-2">
-          <Label htmlFor="email">Email</Label>
-          <Input
-            id="email"
-            type="email"
-            placeholder="your.email@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-        </div>
+      {message && (
+        <Alert variant="default" className="bg-green-50 text-green-800 border-green-200">
+          <AlertDescription>{message}</AlertDescription>
+        </Alert>
+      )}
 
-        <Button type="submit" className="w-full" disabled={isLoading}>
-          {isLoading ? "Sending instructions..." : "Reset password"}
+      <div className="space-y-2">
+        <Label htmlFor="email">Email</Label>
+        <Input id="email" name="email" type="email" placeholder="your.email@example.com" required />
+      </div>
+
+      <div className="flex gap-2">
+        <Button type="submit" className="flex-1" disabled={isLoading}>
+          {isLoading ? "Sending..." : "Reset Password"}
         </Button>
-      </form>
-    </div>
+        {onCancel && (
+          <Button type="button" variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
+        )}
+      </div>
+    </form>
   )
 }

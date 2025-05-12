@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { AlertCircle } from "lucide-react"
+import { useRouter } from "next/navigation"
 
 interface LoginFormProps {
   onSuccess?: () => void
@@ -18,6 +19,7 @@ interface LoginFormProps {
 
 export function LoginForm({ onSuccess, onForgotPassword, redirectAfterAuth = false }: LoginFormProps) {
   const { signIn } = useAuth()
+  const router = useRouter()
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [email, setEmail] = useState("")
@@ -35,6 +37,8 @@ export function LoginForm({ onSuccess, onForgotPassword, redirectAfterAuth = fal
         setError(error.message)
       } else {
         if (onSuccess) onSuccess()
+        if (redirectAfterAuth) router.push("/")
+        router.refresh()
       }
     } catch (err) {
       setError("An unexpected error occurred. Please try again.")
