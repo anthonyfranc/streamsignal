@@ -1,3 +1,4 @@
+import React from "react"
 import { notFound } from "next/navigation"
 import type { Metadata } from "next"
 import Link from "next/link"
@@ -19,6 +20,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { calculateServiceRatings } from "@/app/actions/rating-actions"
 import { getCurrentUser } from "@/lib/auth-utils"
+import { ServiceReviewsSkeleton } from "@/components/services/service-reviews-skeleton"
 
 interface ServicePageProps {
   params: {
@@ -382,7 +384,13 @@ export default async function ServicePage({ params }: ServicePageProps) {
             </TabsContent>
 
             <TabsContent value="reviews" className="pt-6">
-              <ServiceReviews serviceId={serviceId} />
+              {/* Reviews Section */}
+              <div className="mt-12">
+                <h2 className="text-2xl font-bold mb-6">Reviews</h2>
+                <React.Suspense fallback={<ServiceReviewsSkeleton />}>
+                  <ServiceReviews serviceId={service.id} />
+                </React.Suspense>
+              </div>
             </TabsContent>
           </Tabs>
         </div>

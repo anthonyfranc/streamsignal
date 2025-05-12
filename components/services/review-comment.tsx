@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils"
 import type { ReviewComment as ReviewCommentType } from "@/types/reviews"
 import { useReviews } from "@/contexts/reviews-context"
 import { safeInitials, safeFormatDate, safeString, safeNumber } from "@/lib/data-safety-utils"
+import { ReviewCommentSkeleton } from "./review-comment-skeleton"
 
 interface ReviewCommentProps {
   comment: ReviewCommentType
@@ -23,6 +24,7 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
   const [isReplying, setIsReplying] = useState(false)
   const [replyContent, setReplyContent] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isLoadingReplies, setIsLoadingReplies] = useState(false)
 
   // Format date - with error handling
   const formatDate = (dateString: string | null | undefined) => {
@@ -35,6 +37,7 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
     if (!replyContent.trim() || !currentUser) return
 
     setIsSubmitting(true)
+    setIsLoadingReplies(true)
     try {
       const formData = new FormData()
       formData.append("parentCommentId", String(safeNumber(comment?.id, 0)))
@@ -52,6 +55,8 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
       console.error("Error submitting reply:", error)
     } finally {
       setIsSubmitting(false)
+      // Add a small delay to make the transition smoother
+      setTimeout(() => setIsLoadingReplies(false), 500)
     }
   }
 
@@ -163,9 +168,13 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
 
       {replies.length > 0 && (
         <div className="pl-6 space-y-3 border-l-2 border-muted ml-3">
-          {replies.map((reply) => (
-            <ReviewComment key={safeNumber(reply?.id, 0)} comment={reply} serviceId={serviceId} />
-          ))}
+          {isLoadingReplies ? (
+            <ReviewCommentSkeleton />
+          ) : (
+            replies.map((reply) => (
+              <ReviewComment key={safeNumber(reply?.id, 0)} comment={reply} serviceId={serviceId} />
+            ))
+          )}
         </div>
       )}
     </div>

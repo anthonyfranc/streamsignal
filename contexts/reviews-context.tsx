@@ -105,6 +105,8 @@ type ReviewsContextType = {
   comments: Record<number, ReviewComment[]>
   userReactions: Record<string, string>
   isLoading: boolean
+  isLoadingReview: Record<number, boolean>
+  isLoadingComments: Record<number, boolean>
   currentUser: any | null
   userProfile: any | null
   fetchReviews: (serviceId: number) => Promise<void>
@@ -123,6 +125,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
   const [comments, setComments] = useState<Record<number, ReviewComment[]>>({})
   const [userReactions, setUserReactions] = useState<Record<string, string>>({})
   const [isLoading, setIsLoading] = useState(true)
+  const [isLoadingReview, setIsLoadingReview] = useState<Record<number, boolean>>({})
+  const [isLoadingComments, setIsLoadingComments] = useState<Record<number, boolean>>({})
   const [currentUser, setCurrentUser] = useState<any | null>(null)
   const [userProfile, setUserProfile] = useState<any | null>(null)
 
@@ -175,6 +179,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       }
 
       setIsLoading(true)
+      setIsLoadingReview({ ...isLoadingReview, [serviceId]: true })
       try {
         const { data, error } = await supabase
           .from("service_reviews")
@@ -230,9 +235,10 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         setReviews([])
       } finally {
         setIsLoading(false)
+        setIsLoadingReview({ ...isLoadingReview, [serviceId]: false })
       }
     },
-    [currentUser],
+    [currentUser, isLoadingReview],
   )
 
   // Reset fetched state when current user changes
@@ -249,6 +255,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         return comments[reviewId] || []
       }
 
+      setIsLoadingComments({ ...isLoadingComments, [reviewId]: true })
       try {
         // Get all top-level comments for this review
         const { data: topLevelComments, error: commentsError } = await supabase
@@ -347,9 +354,11 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         console.error("Error getting review comments:", error)
         return []
+      } finally {
+        setIsLoadingComments({ ...isLoadingComments, [reviewId]: false })
       }
     },
-    [currentUser, comments],
+    [currentUser, comments, isLoadingComments],
   )
 
   // Submit a new review
@@ -822,10 +831,12 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
   const value: ReviewsContextType = {
     reviews,
     comments,
-    userReactions,
     isLoading,
+    isLoadingReview,
+    isLoadingComments,
     currentUser,
     userProfile,
+    userReactions,
     fetchReviews,
     fetchComments,
     submitReview,

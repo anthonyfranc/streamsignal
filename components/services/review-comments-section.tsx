@@ -9,6 +9,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { ReviewComment } from "./review-comment"
 import { useReviews } from "@/contexts/reviews-context"
 import { safeInitials, safeNumber } from "@/lib/data-safety-utils"
+import { CommentSkeletonList } from "./comment-skeleton"
 
 interface ReviewCommentsSectionProps {
   reviewId: number
@@ -105,9 +106,7 @@ export function ReviewCommentsSection({ reviewId, serviceId }: ReviewCommentsSec
       )}
 
       {isLoading ? (
-        <div className="text-center py-4">
-          <p className="text-sm text-muted-foreground">Loading comments...</p>
-        </div>
+        <CommentSkeletonList />
       ) : reviewComments.length === 0 ? (
         <div className="text-center py-4">
           <p className="text-sm text-muted-foreground">No comments yet. Be the first to comment!</p>

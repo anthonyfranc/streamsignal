@@ -16,6 +16,7 @@ import { AuthButton } from "@/components/auth/auth-button"
 import { cn } from "@/lib/utils"
 import { ReviewsProvider, useReviews } from "@/contexts/reviews-context"
 import { safeInitials, safeFormatDate, safeString, safeNumber, safeGet } from "@/lib/data-safety-utils"
+import { ReviewSkeletonList } from "./review-skeleton"
 
 interface ServiceReviewsProps {
   serviceId: number
@@ -401,9 +402,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
 
       <div className="space-y-5">
         {isLoading ? (
-          <div className="text-center py-8">
-            <p className="text-muted-foreground">Loading reviews...</p>
-          </div>
+          <ReviewSkeletonList />
         ) : filteredReviews.length === 0 ? (
           <Card className="bg-muted/30 border-dashed">
             <CardHeader>
