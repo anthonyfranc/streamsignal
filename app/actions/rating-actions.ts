@@ -1,9 +1,8 @@
 "use server"
 
-import { supabase } from "@/lib/supabase"
-import type { StreamingService } from "@/types/streaming"
+import { getServerSupabaseClient } from "@/utils/supabase/server"
 
-export interface ServiceRatings {
+interface ServiceRatings {
   overall: number
   content: number
   value: number
@@ -12,187 +11,216 @@ export interface ServiceRatings {
 }
 
 export async function calculateServiceRatings(serviceId: number): Promise<ServiceRatings> {
+  const supabase = getServerSupabaseClient()
+
   try {
-    // Fetch the service details
+    // Get service details
     const { data: service, error: serviceError } = await supabase
       .from("streaming_services")
       .select("*")
       .eq("id", serviceId)
       .single()
 
-    if (serviceError) throw serviceError
+    if (serviceError || !service) {
+      console.error("Error fetching service:", serviceError)
+      return getDefaultRatings()
+    }
 
-    // Fetch channel count
+    // Get service reviews
+    const { data: reviews, error: reviewsError } = await supabase
+      .from("service_reviews")
+      .select("*")
+      .eq("service_id", serviceId)
+
+    if (reviewsError) {
+      console.error("Error fetching reviews:", reviewsError)
+      return getDefaultRatings()
+    }
+
+    // Get channel count
     const { count: channelCount, error: channelError } = await supabase
       .from("service_channels")
       .select("*", { count: "exact", head: true })
       .eq("service_id", serviceId)
 
-    if (channelError) throw channelError
+    if (channelError) {
+      console.error("Error counting channels:", channelError)
+      return getDefaultRatings()
+    }
 
-    // Fetch content categories and items
-    const { data: categories, error: categoriesError } = await supabase
+    // Get content categories count
+    const { count: categoriesCount, error: categoriesError } = await supabase
       .from("content_categories")
-      .select("*, items:content_items(*)")
+      .select("*", { count: "exact", head: true })
       .eq("service_id", serviceId)
 
-    if (categoriesError) throw categoriesError
+    if (categoriesError) {
+      console.error("Error counting categories:", categoriesError)
+      return getDefaultRatings()
+    }
 
-    // Count total content items
-    let contentItemCount = 0
-    categories?.forEach((category) => {
-      contentItemCount += category.items?.length || 0
-    })
+    // Calculate content rating
+    let contentRating = 3.0 // Default
 
-    // Fetch user reviews if available
-    const { data: reviews, error: reviewsError } = await supabase
-      .from("service_reviews")
-      .select("rating, interface_rating, reliability_rating")
-      .eq("service_id", serviceId)
+    // If we have user-provided content ratings, use the average
+    if (reviews && reviews.length > 0) {
+      const contentRatings = reviews
+        .filter((review) => review.content_rating !== null)
+        .map((review) => review.content_rating)
 
-    // Calculate content rating (based on content quantity and diversity)
-    const contentRating = calculateContentRating(service, channelCount || 0, contentItemCount, categories?.length || 0)
+      if (contentRatings.length > 0) {
+        contentRating = contentRatings.reduce((sum, rating) => sum + rating, 0) / contentRatings.length
+      } else {
+        // Calculate based on service attributes
+        contentRating = calculateContentRating(service, channelCount || 0, categoriesCount || 0)
+      }
+    } else {
+      // Calculate based on service attributes
+      contentRating = calculateContentRating(service, channelCount || 0, categoriesCount || 0)
+    }
 
-    // Calculate value rating (price vs. content)
-    const valueRating = calculateValueRating(service, channelCount || 0, contentItemCount)
+    // Calculate value rating
+    let valueRating = 3.0 // Default
 
-    // Calculate interface and reliability ratings (from reviews or defaults)
-    const { interfaceRating, reliabilityRating } = calculateUserExperienceRatings(reviews || [])
+    // If we have user-provided value ratings, use the average
+    if (reviews && reviews.length > 0) {
+      const valueRatings = reviews.filter((review) => review.value_rating !== null).map((review) => review.value_rating)
+
+      if (valueRatings.length > 0) {
+        valueRating = valueRatings.reduce((sum, rating) => sum + rating, 0) / valueRatings.length
+      } else {
+        // Calculate based on service attributes
+        valueRating = calculateValueRating(service, channelCount || 0, categoriesCount || 0)
+      }
+    } else {
+      // Calculate based on service attributes
+      valueRating = calculateValueRating(service, channelCount || 0, categoriesCount || 0)
+    }
+
+    // Calculate interface rating
+    let interfaceRating = 3.5 // Default
+
+    // If we have user-provided interface ratings, use the average
+    if (reviews && reviews.length > 0) {
+      const interfaceRatings = reviews
+        .filter((review) => review.interface_rating !== null)
+        .map((review) => review.interface_rating)
+
+      if (interfaceRatings.length > 0) {
+        interfaceRating = interfaceRatings.reduce((sum, rating) => sum + rating, 0) / interfaceRatings.length
+      }
+    }
+
+    // Calculate reliability rating
+    let reliabilityRating = 3.5 // Default
+
+    // If we have user-provided reliability ratings, use the average
+    if (reviews && reviews.length > 0) {
+      const reliabilityRatings = reviews
+        .filter((review) => review.reliability_rating !== null)
+        .map((review) => review.reliability_rating)
+
+      if (reliabilityRatings.length > 0) {
+        reliabilityRating = reliabilityRatings.reduce((sum, rating) => sum + rating, 0) / reliabilityRatings.length
+      }
+    }
 
     // Calculate overall rating (weighted average)
-    const overall = calculateOverallRating(contentRating, valueRating, interfaceRating, reliabilityRating)
+    const overallRating =
+      contentRating * 0.35 + // 35% weight for content
+      valueRating * 0.35 + // 35% weight for value
+      interfaceRating * 0.15 + // 15% weight for interface
+      reliabilityRating * 0.15 // 15% weight for reliability
 
     return {
-      overall,
-      content: contentRating,
-      value: valueRating,
-      interface: interfaceRating,
-      reliability: reliabilityRating,
+      overall: Math.min(5, Math.max(1, overallRating)),
+      content: Math.min(5, Math.max(1, contentRating)),
+      value: Math.min(5, Math.max(1, valueRating)),
+      interface: Math.min(5, Math.max(1, interfaceRating)),
+      reliability: Math.min(5, Math.max(1, reliabilityRating)),
     }
   } catch (error) {
     console.error("Error calculating service ratings:", error)
-
-    // Return default ratings if calculation fails
-    return {
-      overall: 3.5,
-      content: 3.5,
-      value: 3.5,
-      interface: 3.5,
-      reliability: 3.5,
-    }
+    return getDefaultRatings()
   }
 }
 
-// Helper functions for rating calculations
+// Helper function to calculate content rating based on service attributes
+function calculateContentRating(service: any, channelCount: number, categoriesCount: number): number {
+  let rating = 3.0 // Default
 
-function calculateContentRating(
-  service: StreamingService,
-  channelCount: number,
-  contentItemCount: number,
-  categoryCount: number,
-): number {
-  // Base rating starts at 3
-  let rating = 3.0
+  // Base rating on content structure type
+  switch (service.content_structure_type) {
+    case "channels":
+      // More channels = higher rating
+      if (channelCount > 100) rating = 4.5
+      else if (channelCount > 50) rating = 4.0
+      else if (channelCount > 20) rating = 3.5
+      else rating = 3.0
+      break
 
-  // Adjust based on content structure type and quantity
-  if (service.content_structure_type === "channels") {
-    // For channel-based services
-    if (channelCount > 100) rating += 1.5
-    else if (channelCount > 50) rating += 1.0
-    else if (channelCount > 20) rating += 0.5
-  } else if (service.content_structure_type === "categories") {
-    // For category-based services (like Netflix)
-    if (contentItemCount > 1000) rating += 1.5
-    else if (contentItemCount > 500) rating += 1.0
-    else if (contentItemCount > 100) rating += 0.5
+    case "categories":
+      // More categories = higher rating
+      if (categoriesCount > 10) rating = 4.5
+      else if (categoriesCount > 5) rating = 4.0
+      else if (categoriesCount > 2) rating = 3.5
+      else rating = 3.0
+      break
 
-    // Bonus for category diversity
-    if (categoryCount > 10) rating += 0.5
-  } else if (service.content_structure_type === "hybrid") {
-    // For hybrid services
-    const hybridScore = channelCount / 100 + contentItemCount / 1000
-    if (hybridScore > 2) rating += 1.5
-    else if (hybridScore > 1) rating += 1.0
-    else if (hybridScore > 0.5) rating += 0.5
+    case "hybrid":
+      // Hybrid gets a bonus
+      rating = Math.max(
+        3.5,
+        (calculateContentRating({ content_structure_type: "channels" }, channelCount, 0) +
+          calculateContentRating({ content_structure_type: "categories" }, 0, categoriesCount)) /
+          2,
+      )
+      break
+
+    case "add_ons":
+      // Add-ons typically have less content
+      rating = 3.0
+      break
+
+    default:
+      rating = 3.0
   }
 
-  // Cap at 5.0
-  return Math.min(5.0, rating)
-}
-
-function calculateValueRating(service: StreamingService, channelCount: number, contentItemCount: number): number {
-  // Base rating
-  let rating = 3.0
-
-  // Calculate content per dollar
-  const monthlyPrice = service.monthly_price || 9.99
-  const contentPerDollar =
-    service.content_structure_type === "channels" ? channelCount / monthlyPrice : contentItemCount / monthlyPrice
-
-  // Adjust rating based on value
-  if (service.content_structure_type === "channels") {
-    if (contentPerDollar > 10)
-      rating += 1.5 // More than 10 channels per dollar
-    else if (contentPerDollar > 5) rating += 1.0
-    else if (contentPerDollar > 2) rating += 0.5
-  } else {
-    if (contentPerDollar > 100)
-      rating += 1.5 // More than 100 content items per dollar
-    else if (contentPerDollar > 50) rating += 1.0
-    else if (contentPerDollar > 20) rating += 0.5
+  // Adjust for original content
+  if (service.has_original_content) {
+    rating += 0.5
   }
 
-  // Adjust for additional features
-  if (service.has_4k) rating += 0.3
-  if (!service.has_ads) rating += 0.3
-  if (service.max_streams > 3) rating += 0.3
-
-  // Cap at 5.0
-  return Math.min(5.0, rating)
+  return Math.min(5, Math.max(1, rating))
 }
 
-function calculateUserExperienceRatings(reviews: any[]): { interfaceRating: number; reliabilityRating: number } {
-  // Default ratings if no reviews
-  if (!reviews.length) {
-    return {
-      interfaceRating: 3.8,
-      reliabilityRating: 3.8,
-    }
+// Helper function to calculate value rating based on service attributes
+function calculateValueRating(service: any, channelCount: number, categoriesCount: number): number {
+  let rating = 3.0 // Default
+
+  // Base rating on price vs. content
+  const contentScore = calculateContentRating(service, channelCount, categoriesCount)
+  const priceScore = 5 - Math.min(5, service.monthly_price / 10) // Lower price = higher score
+
+  // Average of content and price scores
+  rating = (contentScore + priceScore) / 2
+
+  // Adjust for features
+  if (!service.has_ads) rating += 0.3 // Ad-free is better value
+  if (service.max_streams > 2) rating += 0.2 // More streams is better value
+  if (service.supports_4k) rating += 0.2 // 4K support is better value
+  if (service.has_offline_viewing) rating += 0.2 // Offline viewing is better value
+
+  return Math.min(5, Math.max(1, rating))
+}
+
+// Default ratings if calculation fails
+function getDefaultRatings(): ServiceRatings {
+  return {
+    overall: 3.5,
+    content: 3.5,
+    value: 3.5,
+    interface: 3.5,
+    reliability: 3.5,
   }
-
-  // Calculate average ratings from reviews
-  let interfaceSum = 0
-  let reliabilitySum = 0
-  let interfaceCount = 0
-  let reliabilityCount = 0
-
-  reviews.forEach((review) => {
-    if (review.interface_rating) {
-      interfaceSum += review.interface_rating
-      interfaceCount++
-    }
-
-    if (review.reliability_rating) {
-      reliabilitySum += review.reliability_rating
-      reliabilityCount++
-    }
-  })
-
-  const interfaceRating = interfaceCount > 0 ? interfaceSum / interfaceCount : 3.8
-  const reliabilityRating = reliabilityCount > 0 ? reliabilitySum / reliabilityCount : 3.8
-
-  return { interfaceRating, reliabilityRating }
-}
-
-function calculateOverallRating(
-  contentRating: number,
-  valueRating: number,
-  interfaceRating: number,
-  reliabilityRating: number,
-): number {
-  // Weighted average (content and value are more important)
-  const overall = contentRating * 0.35 + valueRating * 0.35 + interfaceRating * 0.15 + reliabilityRating * 0.15
-
-  // Round to 1 decimal place
-  return Math.round(overall * 10) / 10
 }

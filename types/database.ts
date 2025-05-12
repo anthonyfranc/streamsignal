@@ -109,82 +109,6 @@ export interface Database {
           },
         ]
       }
-      service_reviews: {
-        Row: {
-          id: number
-          service_id: number
-          user_id: string | null
-          author_name: string
-          rating: number
-          title: string
-          content: string
-          interface_rating: number
-          reliability_rating: number
-          content_rating: number
-          value_rating: number
-          likes: number
-          dislikes: number
-          created_at: string
-          status: string
-          moderated_by: string | null
-          moderated_at: string | null
-          rejection_reason: string | null
-        }
-        Insert: {
-          id?: number
-          service_id: number
-          user_id?: string | null
-          author_name: string
-          rating: number
-          title: string
-          content: string
-          interface_rating: number
-          reliability_rating: number
-          content_rating: number
-          value_rating: number
-          likes?: number
-          dislikes?: number
-          created_at?: string
-          status?: string
-          moderated_by?: string | null
-          moderated_at?: string | null
-          rejection_reason?: string | null
-        }
-        Update: {
-          id?: number
-          service_id?: number
-          user_id?: string | null
-          author_name?: string
-          rating?: number
-          title?: string
-          content?: string
-          interface_rating?: number
-          reliability_rating?: number
-          content_rating?: number
-          value_rating?: number
-          likes?: number
-          dislikes?: number
-          created_at?: string
-          status?: string
-          moderated_by?: string | null
-          moderated_at?: string | null
-          rejection_reason?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "service_reviews_service_id_fkey"
-            columns: ["service_id"]
-            referencedRelation: "streaming_services"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "service_reviews_user_id_fkey"
-            columns: ["user_id"]
-            referencedRelation: "users"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       streaming_services: {
         Row: {
           created_at: string
@@ -220,49 +144,6 @@ export interface Database {
           name?: string
         }
         Relationships: []
-      }
-      user_profiles: {
-        Row: {
-          id: string
-          created_at: string
-          updated_at: string
-          display_name: string | null
-          avatar_url: string | null
-          bio: string | null
-          preferences: Json | null
-          review_count: number
-          is_admin: boolean
-        }
-        Insert: {
-          id: string
-          created_at?: string
-          updated_at?: string
-          display_name?: string | null
-          avatar_url?: string | null
-          bio?: string | null
-          preferences?: Json | null
-          review_count?: number
-          is_admin?: boolean
-        }
-        Update: {
-          id?: string
-          created_at?: string
-          updated_at?: string
-          display_name?: string | null
-          avatar_url?: string | null
-          bio?: string | null
-          preferences?: Json | null
-          review_count?: number
-          is_admin?: boolean
-        }
-        Relationships: [
-          {
-            foreignKeyName: "user_profiles_id_fkey"
-            columns: ["id"]
-            referencedRelation: "users"
-            referencedColumns: ["id"]
-          },
-        ]
       }
     }
     Views: {

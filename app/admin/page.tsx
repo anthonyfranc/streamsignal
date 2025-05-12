@@ -6,7 +6,6 @@ import { RecentActivity } from "@/components/admin/recent-activity"
 import { DashboardStats } from "@/components/admin/dashboard-stats"
 import { DashboardCharts } from "@/components/admin/dashboard-charts"
 import { getAdminStats } from "@/app/actions/admin-actions"
-import { requireAdmin } from "@/utils/auth-utils"
 
 export const metadata: Metadata = {
   title: "Admin Dashboard - StreamSignal",
@@ -14,7 +13,6 @@ export const metadata: Metadata = {
 }
 
 export default async function AdminDashboard() {
-  const user = await requireAdmin()
   const stats = await getAdminStats()
 
   return (
@@ -23,7 +21,6 @@ export default async function AdminDashboard() {
         <div>
           <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
           <p className="text-muted-foreground">Overview of your streaming platform's performance and content.</p>
-          <p>Welcome, {user.user_metadata.name || user.email}!</p>
         </div>
       </div>
 

@@ -1,35 +1,44 @@
-import { getSupabaseServerClient } from "@/lib/supabase-server"
-import { redirect } from "next/navigation"
+import { supabase } from "@/lib/supabase"
 
-export async function getUser() {
-  const supabase = getSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  return user
+export async function getCurrentUser() {
+  try {
+    const {
+      data: { session },
+      error,
+    } = await supabase.auth.getSession()
+
+    if (error) {
+      console.error("Error getting session:", error)
+      return null
+    }
+
+    if (!session) {
+      return null
+    }
+
+    return session.user
+  } catch (error) {
+    console.error("Error getting current user:", error)
+    return null
+  }
 }
 
-export async function requireAuth() {
-  const user = await getUser()
-  if (!user) {
-    redirect("/login")
-  }
-  return user
-}
+export function getUserDisplayName(user: any): string {
+  if (!user) return "Anonymous"
 
-export async function requireAdmin() {
-  const user = await getUser()
+  // Try to get the name from different possible locations
+  const fullName =
+    user.user_metadata?.full_name || user.user_metadata?.name || user.profile?.full_name || user.profile?.name
 
-  if (!user) {
-    redirect("/login")
-  }
+  if (fullName) return fullName
 
-  // Check if user has admin role
-  const { data, error } = await getSupabaseServerClient().from("profiles").select("role").eq("id", user.id).single()
-
-  if (error || data?.role !== "admin") {
-    redirect("/unauthorized")
+  // If no name is found, try to use the email
+  const email = user.email
+  if (email) {
+    // Return the part before the @ symbol
+    return email.split("@")[0]
   }
 
-  return user
+  // If all else fails, return the user ID truncated
+  return user.id ? `User ${user.id.substring(0, 6)}` : "Anonymous"
 }

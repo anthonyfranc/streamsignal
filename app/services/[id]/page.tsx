@@ -5,7 +5,7 @@ import { ArrowLeft, Check, Info, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { TabsContent } from "@/components/ui/tabs"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Progress } from "@/components/ui/progress"
 import { getServiceById, getServiceChannelsById, getRelatedServices } from "@/app/actions/streaming-actions"
 import { getServiceTiers } from "@/app/actions/pricing-actions"
@@ -18,13 +18,12 @@ import { FallbackImage } from "@/components/ui/fallback-image"
 import { Card, CardContent } from "@/components/ui/card"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { calculateServiceRatings } from "@/app/actions/rating-actions"
-import { PersistentTabs } from "@/components/services/persistent-tabs"
+import { getCurrentUser } from "@/lib/auth-utils"
 
 interface ServicePageProps {
   params: {
     id: string
   }
-  searchParams?: { tab?: string }
 }
 
 export async function generateMetadata({ params }: ServicePageProps): Promise<Metadata> {
@@ -43,7 +42,7 @@ export async function generateMetadata({ params }: ServicePageProps): Promise<Me
   }
 }
 
-export default async function ServicePage({ params, searchParams }: ServicePageProps) {
+export default async function ServicePage({ params }: ServicePageProps) {
   const serviceId = Number.parseInt(params.id)
   const service = await getServiceById(serviceId)
 
@@ -51,12 +50,18 @@ export default async function ServicePage({ params, searchParams }: ServicePageP
     notFound()
   }
 
+  // Get current user
+  const user = await getCurrentUser()
+
   // Fetch data based on the service's content structure type
   const { channels } = await getServiceChannelsById(serviceId)
   const contentCategories = await getContentCategoriesWithItemsByServiceId(serviceId)
   const addonServices = await getAddonServicesByParentId(serviceId)
   const relatedServices = await getRelatedServices(serviceId)
   const tiers = await getServiceTiers(serviceId)
+
+  // Calculate dynamic ratings
+  const ratings = await calculateServiceRatings(serviceId)
 
   // Group channels by category
   const channelsByCategory: Record<string, typeof channels> = {}
@@ -66,9 +71,6 @@ export default async function ServicePage({ params, searchParams }: ServicePageP
     }
     channelsByCategory[channel.category].push(channel)
   })
-
-  // Get dynamic ratings
-  const ratings = await calculateServiceRatings(serviceId)
 
   // Determine the content tab label based on service type
   const getContentTabLabel = () => {
@@ -98,8 +100,6 @@ export default async function ServicePage({ params, searchParams }: ServicePageP
 
   const contentTabLabel = getContentTabLabel()
   const showContentTab = shouldShowContentTab()
-
-  const defaultValue = "overview"
 
   return (
     <div className="container px-4 py-8 md:px-6 md:py-12">
@@ -136,7 +136,7 @@ export default async function ServicePage({ params, searchParams }: ServicePageP
                       fill="currentColor"
                       viewBox="0 0 20 20"
                     >
-                      <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-.181h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                      <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
                     </svg>
                   ))}
                 </div>
@@ -175,12 +175,14 @@ export default async function ServicePage({ params, searchParams }: ServicePageP
             </div>
           </div>
 
-          <PersistentTabs
-            defaultValue={searchParams?.tab || "overview"}
-            className="mb-12"
-            showContentTab={showContentTab}
-            contentTabLabel={contentTabLabel}
-          >
+          <Tabs defaultValue="overview" className="mb-12">
+            <TabsList className={`grid w-full ${showContentTab ? "grid-cols-4" : "grid-cols-3"}`}>
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              {showContentTab && <TabsTrigger value="content">{contentTabLabel}</TabsTrigger>}
+              <TabsTrigger value="pricing">Pricing</TabsTrigger>
+              <TabsTrigger value="reviews">Reviews</TabsTrigger>
+            </TabsList>
+
             <TabsContent value="overview" className="pt-6">
               <div className="space-y-8">
                 <Card>
@@ -293,7 +295,7 @@ export default async function ServicePage({ params, searchParams }: ServicePageP
                                   <Info className="h-3.5 w-3.5 text-gray-400" />
                                 </TooltipTrigger>
                                 <TooltipContent>
-                                  <p className="text-xs">Stream quality, performance and service uptime</p>
+                                  <p className="text-xs">Stream quality and service uptime</p>
                                 </TooltipContent>
                               </Tooltip>
                             </TooltipProvider>
@@ -380,12 +382,9 @@ export default async function ServicePage({ params, searchParams }: ServicePageP
             </TabsContent>
 
             <TabsContent value="reviews" className="pt-6">
-              <ServiceReviews
-                serviceId={serviceId}
-                isVisible={searchParams?.tab === "reviews" || (!searchParams?.tab && defaultValue === "reviews")}
-              />
+              <ServiceReviews serviceId={serviceId} />
             </TabsContent>
-          </PersistentTabs>
+          </Tabs>
         </div>
 
         <div className="space-y-8">

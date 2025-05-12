@@ -1,39 +1,54 @@
 import { createClient } from "@supabase/supabase-js"
-import type { Database } from "@/types/database"
 
-// Get the Supabase URL and anon key from environment variables
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+// Create a single supabase client for the entire application
+export const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "",
+)
 
-// Create a Supabase client that works in both client and server components
-export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-  },
-})
+// Create a single supabase client for the browser
+const createBrowserClient = () => {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL as string
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string
 
-// Create a singleton instance for reuse
-let _supabaseServer: ReturnType<typeof getSupabase> | null = null
-
-// Helper function to create a Supabase client for server components
-export function getSupabase() {
-  if (!_supabaseServer) {
-    _supabaseServer = createClient<Database>(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        persistSession: false,
-      },
+  if (!supabaseUrl || !supabaseAnonKey) {
+    console.error("Missing Supabase environment variables for browser client:", {
+      hasUrl: !!supabaseUrl,
+      hasAnonKey: !!supabaseAnonKey,
     })
   }
-  return _supabaseServer
+
+  return createClient(supabaseUrl, supabaseAnonKey)
 }
 
+// Create a single supabase client for server components
+const createServerClient = () => {
+  // Use NEXT_PUBLIC_SUPABASE_URL instead of SUPABASE_URL
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL as string
+  // Use SUPABASE_SERVICE_ROLE_KEY if available, otherwise fall back to NEXT_PUBLIC_SUPABASE_ANON_KEY
+  const supabaseServiceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) as string
+
+  if (!supabaseUrl || !supabaseServiceKey) {
+    console.error("Missing Supabase environment variables for server client:", {
+      hasUrl: !!supabaseUrl,
+      hasServiceKey: !!supabaseServiceKey,
+    })
+  }
+
+  return createClient(supabaseUrl, supabaseServiceKey)
+}
+
+// For client components
+export const supabaseBrowser = createBrowserClient()
+
+// For server components
+export const supabaseServer = createServerClient()
+
 // Helper function to check Supabase connection
-// This works in both client and server components
 export async function checkSupabaseConnection() {
   try {
-    const { data, error } = await supabase.from("channels").select("count").limit(1)
+    const { data, error } = await supabaseServer.from("channels").select("count").limit(1)
 
     if (error) {
       console.error("Supabase connection test failed:", error)
@@ -49,5 +64,3 @@ export async function checkSupabaseConnection() {
     }
   }
 }
-
-export const supabaseServer = getSupabase()
