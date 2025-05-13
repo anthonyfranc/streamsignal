@@ -105,6 +105,71 @@ export async function submitComment(formData: FormData) {
 }
 
 /**
+ * Update an existing comment
+ */
+export async function updateComment(formData: FormData) {
+  try {
+    const supabase = createClient()
+
+    // Get the current user
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (!user) {
+      return { error: "You must be logged in to edit a comment" }
+    }
+
+    // Get form data
+    const commentId = formData.get("commentId") as string
+    const content = formData.get("content") as string
+    const serviceId = formData.get("serviceId") as string
+
+    if (!commentId || !content || !serviceId) {
+      return { error: "Missing required fields" }
+    }
+
+    // Verify the user owns this comment
+    const { data: comment, error: fetchError } = await supabase
+      .from("review_comments")
+      .select("user_id")
+      .eq("id", commentId)
+      .single()
+
+    if (fetchError) {
+      console.error("Error fetching comment:", fetchError)
+      return { error: "Failed to verify comment ownership" }
+    }
+
+    if (comment.user_id !== user.id) {
+      return { error: "You can only edit your own comments" }
+    }
+
+    // Update the comment
+    const { data, error } = await supabase
+      .from("review_comments")
+      .update({
+        content,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", commentId)
+      .select()
+
+    if (error) {
+      console.error("Error updating comment:", error)
+      return { error: "Failed to update comment" }
+    }
+
+    // Revalidate the service page
+    revalidatePath(`/services/${serviceId}`)
+
+    return { success: true, comment: data[0] }
+  } catch (error) {
+    console.error("Error in updateComment:", error)
+    return { error: "An unexpected error occurred" }
+  }
+}
+
+/**
  * React to a comment
  */
 export async function reactToComment(formData: FormData) {

@@ -5,6 +5,8 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef } f
 import { supabase } from "@/lib/supabase"
 import type { ServiceReview, ReviewComment, SafeReviewComment, SafeServiceReview } from "@/types/reviews"
 import { safeString, safeNumber, safeGet } from "@/lib/data-safety-utils"
+// Add to imports at the top
+import { updateComment as updateCommentAction } from "@/app/actions/review-actions"
 
 // Safely get user from session
 async function getCurrentUser() {
@@ -101,6 +103,7 @@ function processSafeComment(comment: any, userReaction: string | null = null): S
   }
 }
 
+// Add this to the ReviewsContextType interface
 type ReviewsContextType = {
   reviews: ServiceReview[]
   comments: Record<number, ReviewComment[]>
@@ -115,12 +118,14 @@ type ReviewsContextType = {
   submitReview: (formData: FormData) => Promise<{ success: boolean; error?: string }>
   submitComment: (formData: FormData) => Promise<{ success: boolean; error?: string }>
   submitReply: (formData: FormData) => Promise<{ success: boolean; error?: string }>
+  updateComment: (formData: FormData) => Promise<{ success: boolean; error?: string }> // Add this line
   reactToReview: (reviewId: number, reactionType: string) => Promise<void>
   reactToComment: (commentId: number, reactionType: string) => Promise<void>
 }
 
 const ReviewsContext = createContext<ReviewsContextType | undefined>(undefined)
 
+// Add the updateComment function to the ReviewsProvider component
 export function ReviewsProvider({ children }: { children: React.ReactNode }) {
   const [reviews, setReviews] = useState<ServiceReview[]>([])
   const [comments, setComments] = useState<Record<number, ReviewComment[]>>({})
@@ -769,6 +774,84 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
     [currentUser, userProfile],
   )
 
+  // Add this new function after submitReply
+  const updateComment = useCallback(
+    async (formData: FormData) => {
+      if (!currentUser) {
+        return { success: false, error: "You must be logged in to edit a comment" }
+      }
+
+      const commentId = safeNumber(formData.get("commentId"), 0)
+      const content = safeString(formData.get("content"), "")
+      const serviceId = safeNumber(formData.get("serviceId"), 0)
+
+      if (commentId === 0 || !content.trim()) {
+        return { success: false, error: "Missing required fields" }
+      }
+
+      setIsSubmitting(true)
+
+      try {
+        // Create optimistic update
+        setComments((prev) => {
+          const updateCommentInTree = (commentList: ReviewComment[]): ReviewComment[] => {
+            return commentList.map((comment) => {
+              if (comment.id === commentId) {
+                return {
+                  ...comment,
+                  content,
+                  updated_at: new Date().toISOString(),
+                }
+              }
+              if (comment.replies && comment.replies.length > 0) {
+                return {
+                  ...comment,
+                  replies: updateCommentInTree(comment.replies),
+                }
+              }
+              return comment
+            })
+          }
+
+          const updatedComments = { ...prev }
+          for (const reviewId in updatedComments) {
+            updatedComments[reviewId] = updateCommentInTree(updatedComments[reviewId])
+          }
+          return updatedComments
+        })
+
+        // Call the server action
+        const result = await updateCommentAction(formData)
+
+        if (!result.success) {
+          // If the server action fails, revert the optimistic update
+          // This is a simplified version - for a real implementation,
+          // we would need to store the original comment state and restore it
+
+          // For now, we'll just refresh the comments for the affected review
+          // by resetting the fetchedCommentsRef for all reviews
+          fetchedCommentsRef.current = {}
+
+          // Refresh comments for all reviews
+          const updatedComments = { ...comments }
+          for (const reviewId in updatedComments) {
+            await fetchComments(Number(reviewId))
+          }
+
+          return { success: false, error: result.error }
+        }
+
+        return { success: true }
+      } catch (error) {
+        console.error("Error updating comment:", error)
+        return { success: false, error: "An unexpected error occurred" }
+      } finally {
+        setIsSubmitting(false)
+      }
+    },
+    [currentUser, comments, fetchComments],
+  )
+
   // React to a review (like/dislike)
   const reactToReview = useCallback(
     async (reviewId: number, reactionType: string) => {
@@ -995,6 +1078,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
     [currentUser, userReactions, comments],
   )
 
+  // Add updateComment to the context value
   const value: ReviewsContextType = {
     reviews,
     comments,
@@ -1009,6 +1093,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
     submitReview,
     submitComment,
     submitReply,
+    updateComment, // Add this line
     reactToReview,
     reactToComment,
   }
