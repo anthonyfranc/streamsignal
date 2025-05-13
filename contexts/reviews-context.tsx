@@ -821,27 +821,30 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         })
 
         // Call the server action
-        const result = await updateCommentAction(formData)
+        try {
+          const result = await updateCommentAction(formData)
 
-        if (!result.success) {
-          // If the server action fails, revert the optimistic update
-          // This is a simplified version - for a real implementation,
-          // we would need to store the original comment state and restore it
+          if (!result.success) {
+            console.error("Server returned error:", result.error)
 
-          // For now, we'll just refresh the comments for the affected review
-          // by resetting the fetchedCommentsRef for all reviews
-          fetchedCommentsRef.current = {}
+            // If the server action fails, revert the optimistic update
+            // by resetting the fetchedCommentsRef for all reviews
+            fetchedCommentsRef.current = {}
 
-          // Refresh comments for all reviews
-          const updatedComments = { ...comments }
-          for (const reviewId in updatedComments) {
-            await fetchComments(Number(reviewId))
+            // Refresh comments for all reviews
+            const updatedComments = { ...comments }
+            for (const reviewId in updatedComments) {
+              await fetchComments(Number(reviewId))
+            }
+
+            return { success: false, error: result.error }
           }
 
-          return { success: false, error: result.error }
+          return { success: true }
+        } catch (error) {
+          console.error("Error calling updateComment action:", error)
+          return { success: false, error: "Failed to update comment" }
         }
-
-        return { success: true }
       } catch (error) {
         console.error("Error updating comment:", error)
         return { success: false, error: "An unexpected error occurred" }

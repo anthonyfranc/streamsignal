@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache"
 import { createMediaAsset, type MediaUploadResult } from "./media-actions"
 import { validateAndSanitizeSVG } from "@/lib/svg-validator"
 import { uploadToBlob } from "@/lib/blob-storage"
+import { createClient } from "@/lib/supabase-server"
 
 // Maximum file size in bytes (5MB)
 const MAX_FILE_SIZE = 5 * 1024 * 1024
@@ -301,5 +302,14 @@ export async function validateImageUrl(url: string): Promise<{ valid: boolean; e
       valid: false,
       error: error instanceof Error ? error.message : "An unknown error occurred while validating the URL",
     }
+  }
+}
+
+export async function getMediaUrl() {
+  try {
+    const supabase = await createClient()
+    // ... rest of the function ...
+  } catch (error) {
+    // ... error handling ...
   }
 }

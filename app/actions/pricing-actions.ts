@@ -1,36 +1,48 @@
 "use server"
 
-import { supabaseServer } from "@/lib/supabase"
+import { createClient } from "@/lib/supabase-server"
 import type { ServiceTier, CreateServiceTierInput, UpdateServiceTierInput } from "@/types/pricing"
 
 // Get all tiers for a specific service
 export async function getServiceTiers(serviceId: number): Promise<ServiceTier[]> {
   console.log(`Fetching tiers for service ID: ${serviceId}`)
 
-  const { data, error } = await supabaseServer
-    .from("service_tiers")
-    .select("*")
-    .eq("service_id", serviceId)
-    .order("sort_order")
+  try {
+    const supabase = await createClient()
+    const { data, error } = await supabase
+      .from("service_tiers")
+      .select("*")
+      .eq("service_id", serviceId)
+      .order("sort_order")
 
-  if (error) {
-    console.error("Error fetching service tiers:", error)
+    if (error) {
+      console.error("Error fetching service tiers:", error)
+      return []
+    }
+
+    return data || []
+  } catch (error) {
+    console.error("Error in getServiceTiers:", error)
     return []
   }
-
-  return data || []
 }
 
 // Get a specific tier by ID
 export async function getServiceTierById(tierId: number): Promise<ServiceTier | null> {
-  const { data, error } = await supabaseServer.from("service_tiers").select("*").eq("id", tierId).single()
+  try {
+    const supabase = await createClient()
+    const { data, error } = await supabase.from("service_tiers").select("*").eq("id", tierId).single()
 
-  if (error) {
-    console.error("Error fetching service tier:", error)
+    if (error) {
+      console.error("Error fetching service tier:", error)
+      return null
+    }
+
+    return data
+  } catch (error) {
+    console.error("Error in getServiceTierById:", error)
     return null
   }
-
-  return data
 }
 
 // Create a new tier
@@ -40,7 +52,8 @@ export async function createServiceTier(
   try {
     console.log("Creating service tier with data:", JSON.stringify(tier, null, 2))
 
-    const { data, error } = await supabaseServer.from("service_tiers").insert([tier]).select()
+    const supabase = await createClient()
+    const { data, error } = await supabase.from("service_tiers").insert([tier]).select()
 
     if (error) {
       console.error("Error creating service tier:", error)
@@ -69,11 +82,8 @@ export async function updateServiceTier(tier: UpdateServiceTierInput): Promise<{
 
     console.log(`Updating service tier ID: ${id} with data:`, JSON.stringify(updateData, null, 2))
 
-    const { error } = await supabaseServer
-      .from("service_tiers")
-      .update(updateData)
-      .eq("id", id)
-      .eq("service_id", service_id)
+    const supabase = await createClient()
+    const { error } = await supabase.from("service_tiers").update(updateData).eq("id", id).eq("service_id", service_id)
 
     if (error) {
       console.error("Error updating service tier:", error)
@@ -98,7 +108,8 @@ export async function deleteServiceTier(
   try {
     console.log(`Deleting service tier ID: ${tierId} for service ID: ${serviceId}`)
 
-    const { error } = await supabaseServer.from("service_tiers").delete().eq("id", tierId).eq("service_id", serviceId)
+    const supabase = await createClient()
+    const { error } = await supabase.from("service_tiers").delete().eq("id", tierId).eq("service_id", serviceId)
 
     if (error) {
       console.error("Error deleting service tier:", error)
@@ -123,9 +134,10 @@ export async function updateTierOrder(
   try {
     console.log(`Updating tier order for service ID: ${serviceId}`, tierIds)
 
+    const supabase = await createClient()
     // Create an array of promises for each update operation
     const updatePromises = tierIds.map((tierId, index) =>
-      supabaseServer.from("service_tiers").update({ sort_order: index }).eq("id", tierId).eq("service_id", serviceId),
+      supabase.from("service_tiers").update({ sort_order: index }).eq("id", tierId).eq("service_id", serviceId),
     )
 
     // Execute all updates in parallel
@@ -156,7 +168,8 @@ export async function getTiersForComparison(tierIds: number[]): Promise<ServiceT
   if (!tierIds.length) return []
 
   try {
-    const { data, error } = await supabaseServer.from("service_tiers").select("*").in("id", tierIds).order("sort_order")
+    const supabase = await createClient()
+    const { data, error } = await supabase.from("service_tiers").select("*").in("id", tierIds).order("sort_order")
 
     if (error) {
       console.error("Error fetching tiers for comparison:", error)
@@ -173,7 +186,8 @@ export async function getTiersForComparison(tierIds: number[]): Promise<ServiceT
 // Clear promotion for a tier
 export async function clearPromotion(tierId: number, serviceId: number): Promise<{ success: boolean; error?: string }> {
   try {
-    const { error } = await supabaseServer
+    const supabase = await createClient()
+    const { error } = await supabase
       .from("service_tiers")
       .update({
         promo_price: null,

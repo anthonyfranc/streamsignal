@@ -51,12 +51,19 @@ export const ReviewComment = memo(function ReviewComment({
         formData.append("content", editContent)
         formData.append("serviceId", String(serviceId))
 
-        const result = await updateComment(formData)
+        try {
+          const result = await updateComment(formData)
 
-        if (result.success) {
-          setIsEditing(false)
-        } else {
-          console.error("Error updating comment:", result.error)
+          if (result.success) {
+            setIsEditing(false)
+          } else {
+            console.error("Error updating comment:", result.error)
+            // Show error to user
+            alert(`Failed to update comment: ${result.error || "Unknown error"}`)
+          }
+        } catch (error) {
+          console.error("Exception when updating comment:", error)
+          alert("An unexpected error occurred while updating your comment")
         }
       } catch (error) {
         console.error("Error submitting edit:", error)

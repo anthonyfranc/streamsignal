@@ -1,6 +1,6 @@
 "use server"
 
-import { getServerSupabaseClient } from "@/utils/supabase/server"
+import { createClient } from "@/lib/supabase-server"
 
 interface ServiceRatings {
   overall: number
@@ -11,9 +11,9 @@ interface ServiceRatings {
 }
 
 export async function calculateServiceRatings(serviceId: number): Promise<ServiceRatings> {
-  const supabase = getServerSupabaseClient()
-
   try {
+    const supabase = await createClient()
+
     // Get service details
     const { data: service, error: serviceError } = await supabase
       .from("streaming_services")
