@@ -4,7 +4,7 @@ import type React from "react"
 
 import { useState, useCallback, memo } from "react"
 import { formatDistanceToNow } from "date-fns"
-import { ThumbsUp, MessageSquare } from "lucide-react"
+import { ThumbsUp, ThumbsDown, Reply } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -94,6 +94,7 @@ export const ReviewComment = memo(function ReviewComment({
   const authorAvatar = safeString(comment?.author_avatar, "/placeholder.svg")
   const content = safeString(comment?.content, "")
   const likes = safeNumber(comment?.likes, 0)
+  const dislikes = safeNumber(comment?.dislikes, 0)
   const createdAt = safeString(comment?.created_at, new Date().toISOString())
   const nestingLevel = safeNumber(comment?.nesting_level, 1)
   const replies = Array.isArray(comment?.replies) ? comment.replies : []
@@ -115,6 +116,7 @@ export const ReviewComment = memo(function ReviewComment({
           <p className="text-sm mt-1">{content}</p>
 
           <div className="flex items-center gap-3 mt-2">
+            {/* Like button */}
             <button
               className={cn(
                 "flex items-center gap-1 text-xs transition-colors",
@@ -128,7 +130,24 @@ export const ReviewComment = memo(function ReviewComment({
               <ThumbsUp
                 className={cn("h-3.5 w-3.5", getUserReactionToComment(commentId) === "like" && "fill-primary")}
               />
-              <span>Helpful{likes > 0 && ` (${likes})`}</span>
+              <span>{likes > 0 ? likes : ""}</span>
+            </button>
+
+            {/* Dislike button */}
+            <button
+              className={cn(
+                "flex items-center gap-1 text-xs transition-colors",
+                getUserReactionToComment(commentId) === "dislike"
+                  ? "text-primary font-medium"
+                  : "text-muted-foreground hover:text-primary",
+              )}
+              onClick={() => handleCommentReaction(commentId, "dislike")}
+              disabled={isOptimistic}
+            >
+              <ThumbsDown
+                className={cn("h-3.5 w-3.5", getUserReactionToComment(commentId) === "dislike" && "fill-primary")}
+              />
+              <span>{dislikes > 0 ? dislikes : ""}</span>
             </button>
 
             {nestingLevel < 3 && currentUser && (
@@ -137,7 +156,7 @@ export const ReviewComment = memo(function ReviewComment({
                 onClick={() => setShowReplyForm(!showReplyForm)}
                 disabled={isOptimistic}
               >
-                <MessageSquare className="h-3.5 w-3.5" />
+                <Reply className="h-3.5 w-3.5" />
                 <span>Reply</span>
               </button>
             )}
