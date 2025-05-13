@@ -1,47 +1,67 @@
+export interface ServiceReview {
+  id: number
+  service_id: number
+  user_id?: string
+  author_name: string
+  author_avatar?: string
+  rating: number
+  title: string
+  content: string
+  interface_rating?: number | null
+  reliability_rating?: number | null
+  content_rating?: number | null
+  value_rating?: number | null
+  likes: number
+  dislikes: number
+  created_at: string
+  updated_at?: string | null
+}
+
 export interface ReviewComment {
-  id: number | string
+  id: number
   review_id: number | null
   parent_comment_id: number | null
   user_id: string
   author_name: string
-  author_avatar: string | null
+  author_avatar?: string
   content: string
   likes: number
   dislikes: number
   created_at: string
   updated_at?: string | null
-  nesting_level: number
-  replies: ReviewComment[]
+  nesting_level?: number
+  replies?: ReviewComment[]
   user_reaction?: string | null
   isOptimistic?: boolean
+  isCollapsed?: boolean
 }
 
-export interface ServiceReview {
+export interface SafeServiceReview {
   id: number
   service_id: number
-  user_id: string
-  author_name: string
-  author_avatar?: string | null
-  rating: number
-  title: string | null
-  content: string
-  interface_rating: number | null
-  reliability_rating: number | null
-  content_rating: number | null
-  value_rating: number | null
-  likes: number
-  dislikes: number
-  created_at: string
+  user_id?: string
+  author_name?: string
+  author_avatar?: string
+  rating?: number
+  title?: string
+  content?: string
+  interface_rating?: number | null
+  reliability_rating?: number | null
+  content_rating?: number | null
+  value_rating?: number | null
+  likes?: number
+  dislikes?: number
+  created_at?: string
+  updated_at?: string | null
 }
 
-// Add utility types for safer data handling
 export interface SafeReviewComment {
-  id: number | string
+  id: number
   review_id?: number | null
   parent_comment_id?: number | null
   user_id?: string
   author_name?: string
-  author_avatar?: string | null
+  author_avatar?: string
   content?: string
   likes?: number
   dislikes?: number
@@ -51,5 +71,21 @@ export interface SafeReviewComment {
   replies?: ReviewComment[]
   user_reaction?: string | null
   isOptimistic?: boolean
+  isCollapsed?: boolean
 }
-export type SafeServiceReview = Partial<ServiceReview> & { id: number; service_id: number }
+
+export interface ReviewReaction {
+  id: number
+  user_id: string
+  review_id: number
+  reaction_type: string
+  created_at: string
+}
+
+export interface CommentReaction {
+  id: number
+  user_id: string
+  comment_id: number
+  reaction_type: string
+  created_at: string
+}

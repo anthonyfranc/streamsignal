@@ -1,7 +1,6 @@
 "use client"
 
 import type React from "react"
-
 import { useState, useEffect, useCallback, memo, useMemo, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -11,15 +10,24 @@ import { CommentSkeleton } from "./comment-skeleton"
 import { useReviews } from "@/contexts/reviews-context"
 import { safeInitials } from "@/lib/data-safety-utils"
 import { cn } from "@/lib/utils"
-import { Loader2 } from "lucide-react"
-import { ScrollArea } from "@/components/ui/scroll-area"
+import { ChevronDown, SortAsc, ThumbsUp, MessageSquare } from "lucide-react"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 
 interface ReviewCommentsSectionProps {
   reviewId: number
   serviceId: number
 }
 
-const COMMENTS_PER_BATCH = 5
+const COMMENTS_PER_PAGE = 5
+
+type SortOption = "newest" | "oldest" | "most_liked"
 
 export const ReviewCommentsSection = memo(function ReviewCommentsSection({
   reviewId,
@@ -29,23 +37,15 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
     useReviews()
   const [commentContent, setCommentContent] = useState("")
   const [localSubmitting, setLocalSubmitting] = useState(false)
-  const [visibleComments, setVisibleComments] = useState(COMMENTS_PER_BATCH)
-  const [loadingMore, setLoadingMore] = useState(false)
-
-  // Refs for infinite scrolling
-  const loaderRef = useRef<HTMLDivElement>(null)
-  const prevCommentsLengthRef = useRef(0)
+  const [commentsToShow, setCommentsToShow] = useState(COMMENTS_PER_PAGE)
+  const [sortOption, setSortOption] = useState<SortOption>("newest")
+  const commentsContainerRef = useRef<HTMLDivElement>(null)
+  const reachedEnd = useRef(false)
 
   // Fetch comments for this review
   useEffect(() => {
     fetchComments(reviewId)
   }, [reviewId, fetchComments])
-
-  // Reset visible comments when review changes
-  useEffect(() => {
-    setVisibleComments(COMMENTS_PER_BATCH)
-    prevCommentsLengthRef.current = 0
-  }, [reviewId])
 
   // Handle comment submission with optimistic updates
   const handleCommentSubmit = useCallback(
@@ -67,6 +67,19 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
 
         if (!result.success) {
           console.error("Error submitting comment:", result.error)
+        } else {
+          // Ensure all comments are visible when a new one is added
+          const allReviewComments = comments[reviewId] || []
+          if (allReviewComments.length > commentsToShow) {
+            setCommentsToShow((prev) => Math.max(prev, allReviewComments.length))
+          }
+
+          // Scroll to the new comment
+          setTimeout(() => {
+            if (commentsContainerRef.current) {
+              commentsContainerRef.current.scrollTop = commentsContainerRef.current.scrollHeight
+            }
+          }, 100)
         }
       } catch (error) {
         console.error("Error submitting comment:", error)
@@ -74,51 +87,54 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
         setLocalSubmitting(false)
       }
     },
-    [commentContent, currentUser, reviewId, serviceId, submitComment],
+    [commentContent, currentUser, reviewId, serviceId, submitComment, comments, commentsToShow],
   )
+
+  // Load more comments
+  const loadMoreComments = useCallback(() => {
+    setCommentsToShow((prev) => prev + COMMENTS_PER_PAGE)
+  }, [])
 
   // Get the comments for this review
   const reviewComments = comments[reviewId] || []
-  const isLoading = commentsLoading[reviewId]
 
-  // Set up intersection observer for infinite scrolling
-  useEffect(() => {
-    const currentLoaderRef = loaderRef.current
-
-    if (!currentLoaderRef) return
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const target = entries[0]
-        if (target.isIntersecting && !loadingMore && reviewComments.length > visibleComments) {
-          setLoadingMore(true)
-          // Simulate network delay for smoother UX
-          setTimeout(() => {
-            setVisibleComments((prev) => prev + COMMENTS_PER_BATCH)
-            setLoadingMore(false)
-          }, 300)
-        }
-      },
-      { threshold: 0.1 },
-    )
-
-    observer.observe(currentLoaderRef)
-
-    return () => {
-      if (currentLoaderRef) {
-        observer.unobserve(currentLoaderRef)
+  // Sort comments based on the selected sort option
+  const sortedComments = useMemo(() => {
+    return [...reviewComments].sort((a, b) => {
+      if (sortOption === "newest") {
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      } else if (sortOption === "oldest") {
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      } else if (sortOption === "most_liked") {
+        return (b.likes || 0) - (a.likes || 0)
       }
-    }
-  }, [reviewComments.length, visibleComments, loadingMore])
+      return 0
+    })
+  }, [reviewComments, sortOption])
 
-  // Update visible comments when new comments are added
-  useEffect(() => {
-    if (reviewComments.length > prevCommentsLengthRef.current && prevCommentsLengthRef.current > 0) {
-      // If new comments were added, make sure they're visible
-      setVisibleComments((prev) => Math.max(prev, reviewComments.length))
-    }
-    prevCommentsLengthRef.current = reviewComments.length
-  }, [reviewComments.length])
+  // Visible comments with pagination
+  const visibleComments = useMemo(() => {
+    return sortedComments.slice(0, commentsToShow)
+  }, [sortedComments, commentsToShow])
+
+  const hasMoreComments = reviewComments.length > commentsToShow
+  const isLoading = commentsLoading[reviewId]
+  const totalComments = reviewComments.length
+
+  // Handle scroll to detect when user reaches bottom of scroll area
+  const handleScroll = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
+      // If user is near the bottom and hasn't triggered the load more already
+      if (scrollTop + clientHeight >= scrollHeight - 50 && !reachedEnd.current && hasMoreComments) {
+        reachedEnd.current = true
+        loadMoreComments()
+      } else if (scrollTop + clientHeight < scrollHeight - 100) {
+        reachedEnd.current = false
+      }
+    },
+    [hasMoreComments, loadMoreComments],
+  )
 
   // Get user display name and avatar
   const userDisplayName =
@@ -128,16 +144,8 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
     "Anonymous"
   const userAvatar = userProfile?.avatar_url || currentUser?.user_metadata?.avatar_url || "/placeholder.svg"
 
-  // Slice comments to show only the visible ones
-  const displayedComments = useMemo(() => {
-    return reviewComments.slice(0, visibleComments)
-  }, [reviewComments, visibleComments])
-
-  // Determine if there are more comments to load
-  const hasMoreComments = reviewComments.length > visibleComments
-
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 overflow-visible">
       {currentUser && (
         <form onSubmit={handleCommentSubmit} className="flex gap-3">
           <Avatar className="h-8 w-8 border shadow-sm flex-shrink-0">
@@ -171,6 +179,50 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
         </form>
       )}
 
+      {/* Comment controls */}
+      {reviewComments.length > 0 && (
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1 text-sm text-muted-foreground">
+            <MessageSquare className="h-4 w-4" />
+            <span>
+              {totalComments} {totalComments === 1 ? "comment" : "comments"}
+            </span>
+          </div>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="h-8 gap-1 text-xs">
+                <SortAsc className="h-3.5 w-3.5" />
+                <span>Sort by: {sortOption.replace("_", " ")}</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-[180px]">
+              <DropdownMenuLabel>Sort Comments</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => setSortOption("newest")}
+                className={cn(sortOption === "newest" && "bg-muted")}
+              >
+                Newest first
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => setSortOption("oldest")}
+                className={cn(sortOption === "oldest" && "bg-muted")}
+              >
+                Oldest first
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => setSortOption("most_liked")}
+                className={cn(sortOption === "most_liked" && "bg-muted")}
+              >
+                <ThumbsUp className="h-3.5 w-3.5 mr-2" />
+                Most liked
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
+
       {isLoading && reviewComments.length === 0 ? (
         <div className="space-y-4">
           <CommentSkeleton />
@@ -183,13 +235,15 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
         </div>
       ) : (
         <div className="space-y-4">
-          <div className="text-sm text-muted-foreground">
-            {reviewComments.length} {reviewComments.length === 1 ? "comment" : "comments"}
-          </div>
-
-          <ScrollArea className="max-h-[600px] pr-4">
+          {/* The scrollable comments area with proper padding for the fixed status bar */}
+          <div
+            ref={commentsContainerRef}
+            className="max-h-[600px] overflow-y-auto pr-2"
+            onScroll={handleScroll}
+            style={{ paddingBottom: hasMoreComments ? "40px" : "0" }}
+          >
             <div className="space-y-4">
-              {displayedComments.map((comment) => (
+              {visibleComments.map((comment) => (
                 <ReviewComment
                   key={`comment-${comment?.id}`}
                   comment={comment}
@@ -197,20 +251,28 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
                   isOptimistic={comment.isOptimistic}
                 />
               ))}
-
-              {/* Intersection observer target */}
-              {hasMoreComments && (
-                <div ref={loaderRef} className="py-4 flex justify-center" aria-hidden="true">
-                  {loadingMore && (
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      <span>Loading more comments...</span>
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
-          </ScrollArea>
+          </div>
+
+          {/* Fixed "load more" footer that doesn't overlap with comments */}
+          {hasMoreComments && (
+            <div className="sticky bottom-0 bg-background pt-2 pb-2 border-t border-muted">
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-muted-foreground">
+                  Showing {visibleComments.length} of {totalComments} comments
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="flex items-center gap-1 text-xs"
+                  onClick={loadMoreComments}
+                >
+                  <ChevronDown className="h-4 w-4" />
+                  <span>Load more</span>
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

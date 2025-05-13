@@ -90,6 +90,7 @@ export function getDisplayNameFromData(user: any, userProfile: any): string {
 
 /**
  * Build a comment tree from flat comment data
+ * With improved handling for deeply nested comments
  */
 export function buildCommentTree(
   topLevelComments: any[],
@@ -98,30 +99,52 @@ export function buildCommentTree(
 ): ReviewComment[] {
   const commentMap = new Map<number, ReviewComment>()
 
-  // Process top-level comments
-  const processedTopComments =
-    topLevelComments?.map((comment) => {
-      const userReaction = userReactionsMap[`comment_${comment.id}`] || null
-      const processedComment = processSafeComment(comment, userReaction) as ReviewComment
-      commentMap.set(comment.id, processedComment)
-      return processedComment
-    }) || []
+  // First pass: Create all comment objects and store them in the map
+  const processComment = (comment: any) => {
+    if (!comment || !comment.id) return null
 
-  // Process replies and build the tree
-  allReplies?.forEach((reply) => {
-    if (!reply || !reply.id || !reply.parent_comment_id) return
+    const userReaction = userReactionsMap[`comment_${comment.id}`] || null
+    const processedComment = processSafeComment(comment, userReaction) as ReviewComment
 
-    const userReaction = userReactionsMap[`comment_${reply.id}`] || null
-    const processedReply = processSafeComment(reply, userReaction) as ReviewComment
-
-    commentMap.set(reply.id, processedReply)
-
-    // Add this reply to its parent's replies array
-    if (reply.parent_comment_id && commentMap.has(reply.parent_comment_id)) {
-      const parent = commentMap.get(reply.parent_comment_id)
-      if (parent && parent.replies) {
-        parent.replies.push(processedReply)
+    // Calculate nesting level based on parent chain
+    if (comment.parent_comment_id && commentMap.has(comment.parent_comment_id)) {
+      const parent = commentMap.get(comment.parent_comment_id)
+      if (parent) {
+        processedComment.nesting_level = (parent.nesting_level || 1) + 1
       }
+    } else {
+      processedComment.nesting_level = 1
+    }
+
+    commentMap.set(comment.id, processedComment)
+    return processedComment
+  }
+
+  // Process top-level comments
+  const processedTopComments = topLevelComments?.map(processComment).filter(Boolean) || []
+
+  // Process all replies
+  allReplies?.forEach(processComment)
+
+  // Second pass: Build the tree structure
+  commentMap.forEach((comment) => {
+    if (comment.parent_comment_id && commentMap.has(comment.parent_comment_id)) {
+      const parent = commentMap.get(comment.parent_comment_id)
+      if (parent) {
+        if (!parent.replies) parent.replies = []
+        parent.replies.push(comment)
+      }
+    }
+  })
+
+  // Sort replies by creation date (oldest first)
+  commentMap.forEach((comment) => {
+    if (comment.replies && comment.replies.length > 0) {
+      comment.replies.sort((a, b) => {
+        const dateA = new Date(a.created_at || 0).getTime()
+        const dateB = new Date(b.created_at || 0).getTime()
+        return dateA - dateB
+      })
     }
   })
 
