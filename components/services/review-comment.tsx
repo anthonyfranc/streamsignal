@@ -12,17 +12,24 @@ import { cn } from "@/lib/utils"
 import type { ReviewComment as ReviewCommentType } from "@/types/reviews"
 import { useReviews } from "@/contexts/reviews-context"
 import { safeInitials, safeFormatDate, safeString, safeNumber } from "@/lib/data-safety-utils"
+import { CommentSkeleton } from "./review-skeletons"
 
 interface ReviewCommentProps {
   comment: ReviewCommentType
   serviceId: number
+  isLoading?: boolean
 }
 
-export const ReviewComment = memo(function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
+export const ReviewComment = memo(function ReviewComment({
+  comment,
+  serviceId,
+  isLoading = false,
+}: ReviewCommentProps) {
   const { currentUser, submitReply, reactToComment } = useReviews()
   const [isReplying, setIsReplying] = useState(false)
   const [replyContent, setReplyContent] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [loadingReplies, setLoadingReplies] = useState(false)
 
   // Format date - with error handling
   const formatDate = (dateString: string | null | undefined) => {
@@ -43,10 +50,12 @@ export const ReviewComment = memo(function ReviewComment({ comment, serviceId }:
       formData.append("nestingLevel", String(safeNumber(comment?.nesting_level, 1)))
       formData.append("reviewId", String(safeNumber(comment?.review_id, 0)))
 
+      // Clear the input immediately for better UX
+      setReplyContent("")
+
       const result = await submitReply(formData)
 
       if (result.success) {
-        setReplyContent("")
         setIsReplying(false)
       }
     } catch (error) {
@@ -60,6 +69,19 @@ export const ReviewComment = memo(function ReviewComment({ comment, serviceId }:
   const handleReaction = async (reactionType: "like" | "dislike") => {
     if (!currentUser) return
     await reactToComment(safeNumber(comment?.id, 0), reactionType)
+  }
+
+  // Handle loading more replies
+  const handleLoadReplies = () => {
+    setLoadingReplies(true)
+    // Simulate loading replies (in a real app, this would fetch from the server)
+    setTimeout(() => {
+      setLoadingReplies(false)
+    }, 1000)
+  }
+
+  if (isLoading) {
+    return <CommentSkeleton nested={safeNumber(comment?.nesting_level, 1) > 1} />
   }
 
   // Safely access comment properties with fallbacks
@@ -170,6 +192,13 @@ export const ReviewComment = memo(function ReviewComment({ comment, serviceId }:
           {replies.map((reply) => (
             <ReviewComment key={`reply-${safeNumber(reply?.id, 0)}`} comment={reply} serviceId={serviceId} />
           ))}
+
+          {loadingReplies && (
+            <>
+              <CommentSkeleton nested={true} />
+              <CommentSkeleton nested={true} />
+            </>
+          )}
         </div>
       )}
     </div>

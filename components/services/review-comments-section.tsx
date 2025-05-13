@@ -9,6 +9,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { ReviewComment } from "./review-comment"
 import { useReviews } from "@/contexts/reviews-context"
 import { safeInitials } from "@/lib/data-safety-utils"
+import { CommentSkeleton, CommentFormSkeleton } from "./review-skeletons"
 
 interface ReviewCommentsSectionProps {
   reviewId: number
@@ -33,7 +34,10 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
       } catch (error) {
         console.error("Error fetching comments:", error)
       } finally {
-        setIsLoading(false)
+        // Add a small delay to prevent flickering for fast connections
+        setTimeout(() => {
+          setIsLoading(false)
+        }, 300)
       }
     }
 
@@ -83,39 +87,45 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
 
   return (
     <div className="space-y-4">
-      {currentUser && (
-        <form onSubmit={handleCommentSubmit} className="flex gap-3">
-          <Avatar className="h-8 w-8 border shadow-sm flex-shrink-0">
-            <AvatarImage src={userAvatar || "/placeholder.svg"} alt={userDisplayName} />
-            <AvatarFallback className="bg-primary/10 text-primary text-xs">
-              {safeInitials(userDisplayName)}
-            </AvatarFallback>
-          </Avatar>
-          <div className="flex-1 space-y-2">
-            <Textarea
-              value={commentContent}
-              onChange={(e) => setCommentContent(e.target.value)}
-              placeholder="Write a comment..."
-              className="min-h-[60px] resize-none text-sm rounded-xl py-2 bg-muted/30"
-              disabled={isSubmitting}
-            />
-            <div className="flex justify-end">
-              <Button
-                type="submit"
-                size="sm"
-                className="h-8 text-xs bg-primary hover:bg-primary/90"
-                disabled={isSubmitting || !commentContent.trim()}
-              >
-                {isSubmitting ? "Posting..." : "Post Comment"}
-              </Button>
+      {currentUser ? (
+        isLoading ? (
+          <CommentFormSkeleton />
+        ) : (
+          <form onSubmit={handleCommentSubmit} className="flex gap-3">
+            <Avatar className="h-8 w-8 border shadow-sm flex-shrink-0">
+              <AvatarImage src={userAvatar || "/placeholder.svg"} alt={userDisplayName} />
+              <AvatarFallback className="bg-primary/10 text-primary text-xs">
+                {safeInitials(userDisplayName)}
+              </AvatarFallback>
+            </Avatar>
+            <div className="flex-1 space-y-2">
+              <Textarea
+                value={commentContent}
+                onChange={(e) => setCommentContent(e.target.value)}
+                placeholder="Write a comment..."
+                className="min-h-[60px] resize-none text-sm rounded-xl py-2 bg-muted/30"
+                disabled={isSubmitting}
+              />
+              <div className="flex justify-end">
+                <Button
+                  type="submit"
+                  size="sm"
+                  className="h-8 text-xs bg-primary hover:bg-primary/90"
+                  disabled={isSubmitting || !commentContent.trim()}
+                >
+                  {isSubmitting ? "Posting..." : "Post Comment"}
+                </Button>
+              </div>
             </div>
-          </div>
-        </form>
-      )}
+          </form>
+        )
+      ) : null}
 
-      {isLoading && reviewComments.length === 0 ? (
-        <div className="text-center py-4">
-          <p className="text-sm text-muted-foreground">Loading comments...</p>
+      {isLoading ? (
+        <div className="space-y-4">
+          <CommentSkeleton />
+          <CommentSkeleton />
+          <CommentSkeleton />
         </div>
       ) : reviewComments.length === 0 ? (
         <div className="text-center py-4">
