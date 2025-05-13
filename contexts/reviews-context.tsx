@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from "react"
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react"
 import { supabase } from "@/lib/supabase"
 import type { ServiceReview, ReviewComment, SafeReviewComment, SafeServiceReview } from "@/types/reviews"
 import { safeString, safeNumber, safeGet } from "@/lib/data-safety-utils"
@@ -105,15 +105,13 @@ type ReviewsContextType = {
   comments: Record<number, ReviewComment[]>
   userReactions: Record<string, string>
   isLoading: boolean
-  isLoadingReview: Record<number, boolean>
-  isLoadingComments: Record<number, boolean>
   currentUser: any | null
   userProfile: any | null
   fetchReviews: (serviceId: number) => Promise<void>
   fetchComments: (reviewId: number) => Promise<ReviewComment[]>
-  submitReview: (formData: FormData) => Promise<{ success: boolean; error?: string; data?: ServiceReview }>
-  submitComment: (formData: FormData) => Promise<{ success: boolean; error?: string; data?: ReviewComment }>
-  submitReply: (formData: FormData) => Promise<{ success: boolean; error?: string; data?: ReviewComment }>
+  submitReview: (formData: FormData) => Promise<{ success: boolean; error?: string }>
+  submitComment: (formData: FormData) => Promise<{ success: boolean; error?: string }>
+  submitReply: (formData: FormData) => Promise<{ success: boolean; error?: string }>
   reactToReview: (reviewId: number, reactionType: string) => Promise<void>
   reactToComment: (commentId: number, reactionType: string) => Promise<void>
 }
@@ -125,8 +123,6 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
   const [comments, setComments] = useState<Record<number, ReviewComment[]>>({})
   const [userReactions, setUserReactions] = useState<Record<string, string>>({})
   const [isLoading, setIsLoading] = useState(true)
-  const [isLoadingReview, setIsLoadingReview] = useState<Record<number, boolean>>({})
-  const [isLoadingComments, setIsLoadingComments] = useState<Record<number, boolean>>({})
   const [currentUser, setCurrentUser] = useState<any | null>(null)
   const [userProfile, setUserProfile] = useState<any | null>(null)
 
@@ -179,7 +175,6 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       }
 
       setIsLoading(true)
-      setIsLoadingReview((prev) => ({ ...prev, [serviceId]: true }))
       try {
         const { data, error } = await supabase
           .from("service_reviews")
@@ -193,8 +188,6 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         } else {
           // Process reviews to ensure all required fields exist
           const safeReviews = (data || []).map((review) => processSafeReview(review))
-
-          // Use functional update to prevent race conditions
           setReviews(safeReviews as ServiceReview[])
 
           // If user is logged in, fetch their reactions to these reviews
@@ -237,7 +230,6 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         setReviews([])
       } finally {
         setIsLoading(false)
-        setIsLoadingReview((prev) => ({ ...prev, [serviceId]: false }))
       }
     },
     [currentUser],
@@ -256,8 +248,6 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       if (fetchedCommentsRef.current[reviewId]) {
         return comments[reviewId] || []
       }
-
-      setIsLoadingComments((prev) => ({ ...prev, [reviewId]: true }))
 
       try {
         // Get all top-level comments for this review
@@ -322,7 +312,6 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           topLevelComments?.map((comment) => {
             const userReaction = userReactionsMap[`comment_${comment.id}`] || null
             const processedComment = processSafeComment(comment, userReaction) as ReviewComment
-            processedComment.replies = [] // Ensure replies array exists
             commentMap.set(comment.id, processedComment)
             return processedComment
           }) || []
@@ -345,7 +334,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           }
         })
 
-        // Update comments state without causing re-renders elsewhere
+        // Update comments state
         setComments((prev) => ({
           ...prev,
           [reviewId]: processedTopComments,
@@ -358,8 +347,6 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         console.error("Error getting review comments:", error)
         return []
-      } finally {
-        setIsLoadingComments((prev) => ({ ...prev, [reviewId]: false }))
       }
     },
     [currentUser, comments],
@@ -417,15 +404,13 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           return { success: false, error: error.message }
         }
 
-        // Process the new review
-        const newReview = data && data[0] ? (processSafeReview(data[0]) as ServiceReview) : null
-
-        // Update reviews state with the new review - only if we have data
-        if (newReview) {
-          setReviews((prev) => [newReview, ...prev])
+        // Update reviews state with the new review
+        if (data && data[0]) {
+          const safeReview = processSafeReview(data[0])
+          setReviews((prev) => [safeReview as ServiceReview, ...prev])
         }
 
-        return { success: true, data: newReview }
+        return { success: true }
       } catch (error) {
         console.error("Error submitting review:", error)
         return { success: false, error: "Failed to submit review" }
@@ -476,14 +461,12 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           return { success: false, error: error.message }
         }
 
-        // Process the new comment
-        const newComment = data && data[0] ? (processSafeComment(data[0], null) as ReviewComment) : null
-        newComment!.replies = [] // Ensure replies array exists
+        // Update comments state with the new comment
+        if (data && data[0]) {
+          const newComment = processSafeComment(data[0], null) as ReviewComment
 
-        // Update comments state with the new comment - immutably
-        if (newComment) {
           setComments((prev) => {
-            const existingComments = [...(prev[reviewId] || [])]
+            const existingComments = prev[reviewId] || []
             return {
               ...prev,
               [reviewId]: [...existingComments, newComment],
@@ -491,7 +474,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           })
         }
 
-        return { success: true, data: newComment }
+        return { success: true }
       } catch (error) {
         console.error("Error submitting comment:", error)
         return { success: false, error: "Failed to submit comment" }
@@ -548,21 +531,13 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           return { success: false, error: error.message }
         }
 
-        // Process the new reply
-        const newReply = data && data[0] ? (processSafeComment(data[0], null) as ReviewComment) : null
-        newReply!.replies = [] // Ensure replies array exists
-
         // Find the review ID for this comment
         let reviewId: number | null = null
-        let parentComment: ReviewComment | null = null
-
-        // Search through all review comments to find the parent
         for (const [revId, commentsList] of Object.entries(comments)) {
           const findParentComment = (commentList: ReviewComment[]): boolean => {
             for (const comment of commentList) {
               if (comment.id === parentCommentId) {
                 reviewId = safeNumber(revId, 0)
-                parentComment = comment
                 return true
               }
               if (comment.replies && comment.replies.length > 0) {
@@ -579,18 +554,14 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
-        // If we found the parent comment and review ID, update the state
-        if (reviewId && parentComment && newReply) {
-          // Update the state immutably
-          setComments((prev) => {
-            // Deep clone the current state for this review
-            const updatedComments = JSON.parse(JSON.stringify(prev[reviewId] || []))
+        if (reviewId && data && data[0]) {
+          // Update the comments state by adding the reply to the parent comment
+          const newReply = processSafeComment(data[0], null) as ReviewComment
 
-            // Recursive function to find and update the parent comment
+          setComments((prev) => {
             const updateReplies = (commentList: ReviewComment[]): ReviewComment[] => {
               return commentList.map((comment) => {
                 if (comment.id === parentCommentId) {
-                  // Return a new comment object with the new reply added
                   return {
                     ...comment,
                     replies: [...(comment.replies || []), newReply],
@@ -608,12 +579,12 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
             return {
               ...prev,
-              [reviewId]: updateReplies(updatedComments),
+              [reviewId!]: updateReplies(prev[reviewId!] || []),
             }
           })
         }
 
-        return { success: true, data: newReply }
+        return { success: true }
       } catch (error) {
         console.error("Error submitting reply:", error)
         return { success: false, error: "Failed to submit reply" }
@@ -622,23 +593,22 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
     [currentUser, userProfile, comments],
   )
 
-  // React to a review (like/dislike) - optimized to prevent unnecessary re-renders
+  // React to a review (like/dislike)
   const reactToReview = useCallback(
     async (reviewId: number, reactionType: string) => {
       if (!currentUser) return
 
-      // Get current reaction before updating state
-      const currentReaction = userReactions[`review_${reviewId}`]
-      const isRemovingReaction = currentReaction === reactionType
-
       try {
-        // Optimistic update - update UI immediately
+        // Optimistic update
+        const currentReaction = userReactions[`review_${reviewId}`]
+        const isRemovingReaction = currentReaction === reactionType
+
+        // Update UI immediately
         setUserReactions((prev) => ({
           ...prev,
           [`review_${reviewId}`]: isRemovingReaction ? null : reactionType,
         }))
 
-        // Only update the specific review that changed
         setReviews((prev) =>
           prev.map((review) => {
             if (review.id === reviewId) {
@@ -731,96 +701,62 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
     [currentUser, userReactions, reviews, fetchReviews],
   )
 
-  // React to a comment (like/dislike) - optimized to prevent unnecessary re-renders
+  // React to a comment (like/dislike)
   const reactToComment = useCallback(
     async (commentId: number, reactionType: string) => {
       if (!currentUser) return
 
-      // Get current reaction before updating state
-      const currentReaction = userReactions[`comment_${commentId}`]
-      const isRemovingReaction = currentReaction === reactionType
-
       try {
-        // Optimistic update - update UI immediately
+        // Optimistic update
+        const currentReaction = userReactions[`comment_${commentId}`]
+        const isRemovingReaction = currentReaction === reactionType
+
+        // Update UI immediately
         setUserReactions((prev) => ({
           ...prev,
           [`comment_${commentId}`]: isRemovingReaction ? null : reactionType,
         }))
 
-        // Find the comment in the state without re-rendering the entire tree
-        setComments((prevComments) => {
-          // Create a new object reference
-          const newComments = { ...prevComments }
+        // Update comments state
+        setComments((prev) => {
+          const updateCommentReaction = (commentList: ReviewComment[]): ReviewComment[] => {
+            return commentList.map((comment) => {
+              if (comment.id === commentId) {
+                let likes = safeNumber(comment.likes, 0)
+                let dislikes = safeNumber(comment.dislikes, 0)
 
-          // Flag to track if we found and updated the comment
-          let commentFound = false
+                // Remove previous reaction if exists
+                if (currentReaction === "like") likes = Math.max(0, likes - 1)
+                if (currentReaction === "dislike") dislikes = Math.max(0, dislikes - 1)
 
-          // Loop through each review's comments
-          for (const reviewId in newComments) {
-            if (!commentFound) {
-              // Deep clone the comments for this review
-              const reviewComments = JSON.parse(JSON.stringify(newComments[reviewId]))
+                // Add new reaction if not removing
+                if (!isRemovingReaction) {
+                  if (reactionType === "like") likes++
+                  if (reactionType === "dislike") dislikes++
+                }
 
-              // Recursive function to find and update a comment in the tree
-              const updateCommentLikes = (comments: ReviewComment[]): [ReviewComment[], boolean] => {
-                const updatedComments = comments.map((comment) => {
-                  // If this is the comment we're looking for
-                  if (comment.id === commentId) {
-                    commentFound = true
-
-                    let likes = safeNumber(comment.likes, 0)
-                    let dislikes = safeNumber(comment.dislikes, 0)
-
-                    // Remove previous reaction if exists
-                    if (currentReaction === "like") likes = Math.max(0, likes - 1)
-                    if (currentReaction === "dislike") dislikes = Math.max(0, dislikes - 1)
-
-                    // Add new reaction if not removing
-                    if (!isRemovingReaction) {
-                      if (reactionType === "like") likes++
-                      if (reactionType === "dislike") dislikes++
-                    }
-
-                    // Return updated comment
-                    return {
-                      ...comment,
-                      likes,
-                      dislikes,
-                      user_reaction: isRemovingReaction ? null : reactionType,
-                    }
-                  }
-
-                  // If comment has replies, search in them too
-                  if (comment.replies && comment.replies.length > 0) {
-                    const [updatedReplies, foundInReplies] = updateCommentLikes(comment.replies)
-
-                    // If we found the comment in replies, update this comment with new replies
-                    if (foundInReplies) {
-                      commentFound = true
-                      return { ...comment, replies: updatedReplies }
-                    }
-                  }
-
-                  // Not the comment we're looking for
-                  return comment
-                })
-
-                return [updatedComments, commentFound]
+                return {
+                  ...comment,
+                  likes,
+                  dislikes,
+                  user_reaction: isRemovingReaction ? null : (reactionType as "like" | "dislike" | null),
+                }
               }
-
-              // Update the comments for this review
-              const [updatedReviewComments, found] = updateCommentLikes(reviewComments)
-
-              // If we found and updated the comment, update the state for this review
-              if (found) {
-                newComments[reviewId] = updatedReviewComments
-                break // Exit the loop early
+              if (comment.replies && comment.replies.length > 0) {
+                return {
+                  ...comment,
+                  replies: updateCommentReaction(comment.replies),
+                }
               }
-            }
+              return comment
+            })
           }
 
-          // Return the updated state
-          return newComments
+          const updatedComments = { ...prev }
+          for (const reviewId in updatedComments) {
+            updatedComments[reviewId] = updateCommentReaction(updatedComments[reviewId])
+          }
+          return updatedComments
         })
 
         // Perform actual API call
@@ -877,49 +813,27 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (error) {
         console.error("Error reacting to comment:", error)
-        // No revert needed as we're using optimistic updates
+        // No need to revert optimistic update as it would cause a full re-render
       }
     },
     [currentUser, userReactions, comments],
   )
 
-  // Memoize the context value to prevent unnecessary re-renders
-  const value = useMemo(
-    () => ({
-      reviews,
-      comments,
-      isLoading,
-      isLoadingReview,
-      isLoadingComments,
-      currentUser,
-      userProfile,
-      userReactions,
-      fetchReviews,
-      fetchComments,
-      submitReview,
-      submitComment,
-      submitReply,
-      reactToReview,
-      reactToComment,
-    }),
-    [
-      reviews,
-      comments,
-      isLoading,
-      isLoadingReview,
-      isLoadingComments,
-      currentUser,
-      userProfile,
-      userReactions,
-      fetchReviews,
-      fetchComments,
-      submitReview,
-      submitComment,
-      submitReply,
-      reactToReview,
-      reactToComment,
-    ],
-  )
+  const value: ReviewsContextType = {
+    reviews,
+    comments,
+    userReactions,
+    isLoading,
+    currentUser,
+    userProfile,
+    fetchReviews,
+    fetchComments,
+    submitReview,
+    submitComment,
+    submitReply,
+    reactToReview,
+    reactToComment,
+  }
 
   return <ReviewsContext.Provider value={value}>{children}</ReviewsContext.Provider>
 }

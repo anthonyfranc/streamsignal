@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, memo, useCallback } from "react"
+import { useState } from "react"
 import { formatDistanceToNow } from "date-fns"
 import { ThumbsUp, ThumbsDown, Reply, MoreHorizontal } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -12,69 +12,54 @@ import { cn } from "@/lib/utils"
 import type { ReviewComment as ReviewCommentType } from "@/types/reviews"
 import { useReviews } from "@/contexts/reviews-context"
 import { safeInitials, safeFormatDate, safeString, safeNumber } from "@/lib/data-safety-utils"
-import { ReviewCommentSkeleton } from "./review-comment-skeleton"
-import { useTransitionState } from "@/hooks/use-transition-state"
 
 interface ReviewCommentProps {
   comment: ReviewCommentType
   serviceId: number
 }
 
-function ReviewCommentBase({ comment, serviceId }: ReviewCommentProps) {
+export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
   const { currentUser, submitReply, reactToComment } = useReviews()
   const [isReplying, setIsReplying] = useState(false)
   const [replyContent, setReplyContent] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [isLoadingReplies, setIsLoadingReplies] = useState(false)
-
-  // Use transition state for replies to prevent flashing
-  const replies = useTransitionState(Array.isArray(comment?.replies) ? comment.replies : [])
 
   // Format date - with error handling
-  const formatDate = useCallback((dateString: string | null | undefined) => {
+  const formatDate = (dateString: string | null | undefined) => {
     return safeFormatDate(dateString, (date) => formatDistanceToNow(date, { addSuffix: true }))
-  }, [])
+  }
 
   // Handle reply submission
-  const handleReplySubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault()
-      if (!replyContent.trim() || !currentUser) return
+  const handleReplySubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!replyContent.trim() || !currentUser) return
 
-      setIsSubmitting(true)
-      setIsLoadingReplies(true)
-      try {
-        const formData = new FormData()
-        formData.append("parentCommentId", String(safeNumber(comment?.id, 0)))
-        formData.append("content", replyContent)
-        formData.append("serviceId", String(safeNumber(serviceId, 0)))
-        formData.append("nestingLevel", String(safeNumber(comment?.nesting_level, 1)))
+    setIsSubmitting(true)
+    try {
+      const formData = new FormData()
+      formData.append("parentCommentId", String(safeNumber(comment?.id, 0)))
+      formData.append("content", replyContent)
+      formData.append("serviceId", String(safeNumber(serviceId, 0)))
+      formData.append("nestingLevel", String(safeNumber(comment?.nesting_level, 1)))
 
-        const result = await submitReply(formData)
+      const result = await submitReply(formData)
 
-        if (result.success) {
-          setReplyContent("")
-          setIsReplying(false)
-        }
-      } catch (error) {
-        console.error("Error submitting reply:", error)
-      } finally {
-        setIsSubmitting(false)
-        // Add a small delay to make the transition smoother
-        setTimeout(() => setIsLoadingReplies(false), 500)
+      if (result.success) {
+        setReplyContent("")
+        setIsReplying(false)
       }
-    },
-    [replyContent, currentUser, comment?.id, comment?.nesting_level, serviceId, submitReply],
-  )
+    } catch (error) {
+      console.error("Error submitting reply:", error)
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
 
   // Handle reaction
-  const handleReaction = useCallback(
-    async (reactionType: "like" | "dislike") => {
-      if (!currentUser) return
-      await reactToComment(safeNumber(comment?.id, 0), reactionType)
-    },
-    [currentUser, comment?.id, reactToComment],
-  )
+  const handleReaction = async (reactionType: "like" | "dislike") => {
+    if (!currentUser) return
+    await reactToComment(safeNumber(comment?.id, 0), reactionType)
+  }
 
   // Safely access comment properties with fallbacks
   const authorName = safeString(comment?.author_name, "Anonymous")
@@ -85,9 +70,10 @@ function ReviewCommentBase({ comment, serviceId }: ReviewCommentProps) {
   const nestingLevel = safeNumber(comment?.nesting_level, 1)
   const createdAt = safeString(comment?.created_at, new Date().toISOString())
   const userReaction = comment?.user_reaction || null
+  const replies = Array.isArray(comment?.replies) ? comment.replies : []
 
   return (
-    <div className="space-y-3 animate-in fade-in-0 duration-300">
+    <div className="space-y-3">
       <div className="flex items-start gap-2">
         <Avatar className="h-7 w-7 border shadow-sm">
           <AvatarImage src={authorAvatar || "/placeholder.svg"} alt={authorName} />
@@ -177,18 +163,11 @@ function ReviewCommentBase({ comment, serviceId }: ReviewCommentProps) {
 
       {replies.length > 0 && (
         <div className="pl-6 space-y-3 border-l-2 border-muted ml-3">
-          {isLoadingReplies ? (
-            <ReviewCommentSkeleton />
-          ) : (
-            replies.map((reply) => (
-              <ReviewComment key={safeNumber(reply?.id, 0)} comment={reply} serviceId={serviceId} />
-            ))
-          )}
+          {replies.map((reply) => (
+            <ReviewComment key={safeNumber(reply?.id, 0)} comment={reply} serviceId={serviceId} />
+          ))}
         </div>
       )}
     </div>
   )
 }
-
-// Memoize the component to prevent unnecessary re-renders
-export const ReviewComment = memo(ReviewCommentBase)

@@ -1,12 +1,14 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
-import { CommentForm } from "./comment-form"
-import { CommentThread } from "./comment-thread"
-import { CommentSkeletonList } from "./comment-skeleton"
+import type React from "react"
+
+import { useState, useEffect } from "react"
+import { Button } from "@/components/ui/button"
+import { Textarea } from "@/components/ui/textarea"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { ReviewComment } from "./review-comment"
 import { useReviews } from "@/contexts/reviews-context"
-import { safeNumber } from "@/lib/data-safety-utils"
-import type { ReviewComment } from "@/types/reviews"
+import { safeInitials, safeNumber } from "@/lib/data-safety-utils"
 
 interface ReviewCommentsSectionProps {
   reviewId: number
@@ -14,78 +16,106 @@ interface ReviewCommentsSectionProps {
 }
 
 export function ReviewCommentsSection({ reviewId, serviceId }: ReviewCommentsSectionProps) {
-  const { comments, fetchComments } = useReviews()
+  const { comments, currentUser, userProfile, fetchComments, submitComment } = useReviews()
+  const [commentContent, setCommentContent] = useState("")
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
-  const [localComments, setLocalComments] = useState<ReviewComment[]>([])
 
   // Fetch comments for this review
   useEffect(() => {
-    let isMounted = true
-
     const loadComments = async () => {
       setIsLoading(true)
       try {
-        const fetchedComments = await fetchComments(reviewId)
-
-        if (isMounted) {
-          setLocalComments(fetchedComments)
-        }
+        await fetchComments(reviewId)
       } catch (error) {
         console.error("Error fetching comments:", error)
       } finally {
-        if (isMounted) {
-          // Add a small delay for smoother transitions
-          setTimeout(() => setIsLoading(false), 300)
-        }
+        setIsLoading(false)
       }
     }
 
     loadComments()
-
-    return () => {
-      isMounted = false
-    }
   }, [reviewId, fetchComments])
 
-  // Update local comments when the global state changes
-  useEffect(() => {
-    if (comments[reviewId] && !isLoading) {
-      setLocalComments(comments[reviewId])
+  // Handle comment submission
+  const handleCommentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!commentContent.trim() || !currentUser) return
+
+    setIsSubmitting(true)
+    try {
+      const formData = new FormData()
+      formData.append("reviewId", String(reviewId))
+      formData.append("content", commentContent)
+      formData.append("serviceId", String(serviceId))
+
+      const result = await submitComment(formData)
+
+      if (result.success) {
+        setCommentContent("")
+      }
+    } catch (error) {
+      console.error("Error submitting comment:", error)
+    } finally {
+      setIsSubmitting(false)
     }
-  }, [comments, reviewId, isLoading])
+  }
 
-  // Handle when a new comment is submitted
-  const handleCommentSubmitted = useCallback((newComment: ReviewComment) => {
-    setLocalComments((prev) => [...prev, newComment])
-  }, [])
+  // Get the comments for this review
+  const reviewComments = comments[reviewId] || []
 
-  // Handle when a reply is added to any comment in the thread
-  const handleReplyAdded = useCallback((parentId: number, reply: ReviewComment) => {
-    // This is handled by the CommentThread component internally
-    // We don't need to modify our top-level state for replies
-  }, [])
+  // Get user display name and avatar
+  const userDisplayName =
+    userProfile?.display_name ||
+    currentUser?.user_metadata?.full_name ||
+    currentUser?.user_metadata?.name ||
+    "Anonymous"
+  const userAvatar = userProfile?.avatar_url || currentUser?.user_metadata?.avatar_url || "/placeholder.svg"
 
   return (
     <div className="space-y-4">
-      {/* Comment form */}
-      <CommentForm reviewId={reviewId} serviceId={serviceId} onCommentSubmitted={handleCommentSubmitted} />
+      {currentUser && (
+        <form onSubmit={handleCommentSubmit} className="flex gap-3">
+          <Avatar className="h-8 w-8 border shadow-sm flex-shrink-0">
+            <AvatarImage src={userAvatar || "/placeholder.svg"} alt={userDisplayName} />
+            <AvatarFallback className="bg-primary/10 text-primary text-xs">
+              {safeInitials(userDisplayName)}
+            </AvatarFallback>
+          </Avatar>
+          <div className="flex-1 space-y-2">
+            <Textarea
+              value={commentContent}
+              onChange={(e) => setCommentContent(e.target.value)}
+              placeholder="Write a comment..."
+              className="min-h-[60px] resize-none text-sm rounded-xl py-2 bg-muted/30"
+              disabled={isSubmitting}
+            />
+            <div className="flex justify-end">
+              <Button
+                type="submit"
+                size="sm"
+                className="h-8 text-xs bg-primary hover:bg-primary/90"
+                disabled={isSubmitting || !commentContent.trim()}
+              >
+                {isSubmitting ? "Posting..." : "Post Comment"}
+              </Button>
+            </div>
+          </div>
+        </form>
+      )}
 
-      {/* Comments content */}
       {isLoading ? (
-        <CommentSkeletonList />
-      ) : localComments.length === 0 ? (
-        <div className="text-center py-4 animate-in fade-in-0 duration-300">
+        <div className="text-center py-4">
+          <p className="text-sm text-muted-foreground">Loading comments...</p>
+        </div>
+      ) : reviewComments.length === 0 ? (
+        <div className="text-center py-4">
           <p className="text-sm text-muted-foreground">No comments yet. Be the first to comment!</p>
         </div>
       ) : (
         <div className="space-y-4">
-          {localComments.map((comment) => (
-            <CommentThread
-              key={safeNumber(comment?.id, 0)}
-              comment={comment}
-              serviceId={serviceId}
-              onReplyAdded={handleReplyAdded}
-            />
+          {reviewComments.map((comment) => (
+            <ReviewComment key={safeNumber(comment?.id, 0)} comment={comment} serviceId={serviceId} />
           ))}
         </div>
       )}
