@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useEffect, useCallback, memo } from "react"
+import { useState, useEffect, useCallback, memo, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -11,11 +11,15 @@ import { CommentSkeleton } from "./comment-skeleton"
 import { useReviews } from "@/contexts/reviews-context"
 import { safeInitials } from "@/lib/data-safety-utils"
 import { cn } from "@/lib/utils"
+import { ChevronDown } from "lucide-react"
+import { ScrollArea } from "@/components/ui/scroll-area"
 
 interface ReviewCommentsSectionProps {
   reviewId: number
   serviceId: number
 }
+
+const COMMENTS_PER_PAGE = 5
 
 export const ReviewCommentsSection = memo(function ReviewCommentsSection({
   reviewId,
@@ -25,6 +29,7 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
     useReviews()
   const [commentContent, setCommentContent] = useState("")
   const [localSubmitting, setLocalSubmitting] = useState(false)
+  const [visibleComments, setVisibleComments] = useState(COMMENTS_PER_PAGE)
 
   // Fetch comments for this review
   useEffect(() => {
@@ -65,6 +70,16 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
   const reviewComments = comments[reviewId] || []
   const isLoading = commentsLoading[reviewId]
 
+  // Show more comments
+  const handleShowMoreComments = useCallback(() => {
+    setVisibleComments((prev) => prev + COMMENTS_PER_PAGE)
+  }, [])
+
+  // Reset visible comments when review changes
+  useEffect(() => {
+    setVisibleComments(COMMENTS_PER_PAGE)
+  }, [reviewId])
+
   // Get user display name and avatar
   const userDisplayName =
     userProfile?.display_name ||
@@ -72,6 +87,14 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
     currentUser?.user_metadata?.name ||
     "Anonymous"
   const userAvatar = userProfile?.avatar_url || currentUser?.user_metadata?.avatar_url || "/placeholder.svg"
+
+  // Slice comments to show only the visible ones
+  const displayedComments = useMemo(() => {
+    return reviewComments.slice(0, visibleComments)
+  }, [reviewComments, visibleComments])
+
+  // Determine if there are more comments to load
+  const hasMoreComments = reviewComments.length > visibleComments
 
   return (
     <div className="space-y-4">
@@ -120,14 +143,36 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
         </div>
       ) : (
         <div className="space-y-4">
-          {reviewComments.map((comment) => (
-            <ReviewComment
-              key={`comment-${comment?.id}`}
-              comment={comment}
-              serviceId={serviceId}
-              isOptimistic={comment.isOptimistic}
-            />
-          ))}
+          <div className="text-sm text-muted-foreground">
+            {reviewComments.length} {reviewComments.length === 1 ? "comment" : "comments"}
+          </div>
+
+          <ScrollArea className="max-h-[600px] pr-4">
+            <div className="space-y-4">
+              {displayedComments.map((comment) => (
+                <ReviewComment
+                  key={`comment-${comment?.id}`}
+                  comment={comment}
+                  serviceId={serviceId}
+                  isOptimistic={comment.isOptimistic}
+                />
+              ))}
+            </div>
+
+            {hasMoreComments && (
+              <div className="pt-4 pb-2 text-center">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleShowMoreComments}
+                  className="text-xs flex items-center gap-1"
+                >
+                  <ChevronDown className="h-3.5 w-3.5" />
+                  Show more comments ({reviewComments.length - visibleComments} remaining)
+                </Button>
+              </div>
+            )}
+          </ScrollArea>
         </div>
       )}
     </div>
