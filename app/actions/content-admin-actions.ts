@@ -1,6 +1,6 @@
 "use server"
 
-import { createClient } from "@/lib/supabase-server"
+import { supabaseServer } from "@/lib/supabase"
 import type { ContentCategory, ContentItem, AddonService } from "@/types/streaming"
 
 // Content Category Management
@@ -8,8 +8,7 @@ export async function createContentCategory(
   category: Omit<ContentCategory, "id" | "created_at">,
 ): Promise<{ success: boolean; id?: number; error?: string }> {
   try {
-    const supabase = await createClient()
-    const { data, error } = await supabase.from("content_categories").insert([category]).select()
+    const { data, error } = await supabaseServer.from("content_categories").insert([category]).select()
 
     if (error) {
       console.error("Error creating content category:", error)
@@ -35,8 +34,7 @@ export async function updateContentCategory(
   category: Partial<ContentCategory>,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const supabase = await createClient()
-    const { error } = await supabase.from("content_categories").update(category).eq("id", id)
+    const { error } = await supabaseServer.from("content_categories").update(category).eq("id", id)
 
     if (error) {
       console.error("Error updating content category:", error)
@@ -55,9 +53,8 @@ export async function updateContentCategory(
 
 export async function deleteContentCategory(id: number): Promise<{ success: boolean; error?: string }> {
   try {
-    const supabase = await createClient()
     // First delete all content items in this category
-    const { error: itemsError } = await supabase.from("content_items").delete().eq("category_id", id)
+    const { error: itemsError } = await supabaseServer.from("content_items").delete().eq("category_id", id)
 
     if (itemsError) {
       console.error("Error deleting content items:", itemsError)
@@ -65,7 +62,7 @@ export async function deleteContentCategory(id: number): Promise<{ success: bool
     }
 
     // Then delete the category
-    const { error } = await supabase.from("content_categories").delete().eq("id", id)
+    const { error } = await supabaseServer.from("content_categories").delete().eq("id", id)
 
     if (error) {
       console.error("Error deleting content category:", error)
@@ -87,8 +84,7 @@ export async function createContentItem(
   item: Omit<ContentItem, "id" | "created_at">,
 ): Promise<{ success: boolean; id?: number; error?: string }> {
   try {
-    const supabase = await createClient()
-    const { data, error } = await supabase.from("content_items").insert([item]).select()
+    const { data, error } = await supabaseServer.from("content_items").insert([item]).select()
 
     if (error) {
       console.error("Error creating content item:", error)
@@ -114,8 +110,7 @@ export async function updateContentItem(
   item: Partial<ContentItem>,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const supabase = await createClient()
-    const { error } = await supabase.from("content_items").update(item).eq("id", id)
+    const { error } = await supabaseServer.from("content_items").update(item).eq("id", id)
 
     if (error) {
       console.error("Error updating content item:", error)
@@ -134,8 +129,7 @@ export async function updateContentItem(
 
 export async function deleteContentItem(id: number): Promise<{ success: boolean; error?: string }> {
   try {
-    const supabase = await createClient()
-    const { error } = await supabase.from("content_items").delete().eq("id", id)
+    const { error } = await supabaseServer.from("content_items").delete().eq("id", id)
 
     if (error) {
       console.error("Error deleting content item:", error)
@@ -157,9 +151,8 @@ export async function createAddonService(
   addon: Omit<AddonService, "id" | "created_at">,
 ): Promise<{ success: boolean; id?: number; error?: string }> {
   try {
-    const supabase = await createClient()
     // First check if this addon service relationship already exists
-    const { data: existingAddon, error: checkError } = await supabase
+    const { data: existingAddon, error: checkError } = await supabaseServer
       .from("addon_services")
       .select("*")
       .eq("parent_service_id", addon.parent_service_id)
@@ -176,7 +169,7 @@ export async function createAddonService(
     }
 
     // Create the addon service relationship
-    const { data, error } = await supabase.from("addon_services").insert([addon]).select()
+    const { data, error } = await supabaseServer.from("addon_services").insert([addon]).select()
 
     if (error) {
       console.error("Error creating addon service:", error)
@@ -202,8 +195,7 @@ export async function updateAddonService(
   addon: Partial<AddonService>,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const supabase = await createClient()
-    const { error } = await supabase.from("addon_services").update(addon).eq("id", id)
+    const { error } = await supabaseServer.from("addon_services").update(addon).eq("id", id)
 
     if (error) {
       console.error("Error updating addon service:", error)
@@ -222,8 +214,7 @@ export async function updateAddonService(
 
 export async function deleteAddonService(id: number): Promise<{ success: boolean; error?: string }> {
   try {
-    const supabase = await createClient()
-    const { error } = await supabase.from("addon_services").delete().eq("id", id)
+    const { error } = await supabaseServer.from("addon_services").delete().eq("id", id)
 
     if (error) {
       console.error("Error deleting addon service:", error)
@@ -243,9 +234,8 @@ export async function deleteAddonService(id: number): Promise<{ success: boolean
 // Get available services for add-ons (services that are not already add-ons for this parent service)
 export async function getAvailableAddonServices(parentServiceId: number): Promise<{ id: number; name: string }[]> {
   try {
-    const supabase = await createClient()
     // Get all current addon services for this parent
-    const { data: currentAddons, error: addonsError } = await supabase
+    const { data: currentAddons, error: addonsError } = await supabaseServer
       .from("addon_services")
       .select("addon_service_id")
       .eq("parent_service_id", parentServiceId)
@@ -259,7 +249,7 @@ export async function getAvailableAddonServices(parentServiceId: number): Promis
     const currentAddonIds = currentAddons.map((addon) => addon.addon_service_id)
     const ids = [...currentAddonIds, parentServiceId]
 
-    const { data: availableServices, error: servicesError } = await supabase
+    const { data: availableServices, error: servicesError } = await supabaseServer
       .from("streaming_services")
       .select("id, name")
       .not("id", "in", `(${ids.join(",")})`)

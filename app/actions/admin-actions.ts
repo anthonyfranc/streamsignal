@@ -1,6 +1,6 @@
 "use server"
 
-import { createClient } from "@/lib/supabase-server"
+import { supabaseServer } from "@/lib/supabase"
 import type { StreamingService, Channel, ServiceChannel } from "@/types/streaming"
 
 export interface AdminStats {
@@ -32,10 +32,9 @@ export async function getAdminStats(): Promise<AdminStats> {
   // For this example, we'll use mock data
 
   // Get actual counts from the database
-  const supabase = await createClient()
-  const { data: services, error: servicesError } = await supabase.from("streaming_services").select("id")
-  const { data: channels, error: channelsError } = await supabase.from("channels").select("id")
-  const { data: mappings, error: mappingsError } = await supabase
+  const { data: services, error: servicesError } = await supabaseServer.from("streaming_services").select("id")
+  const { data: channels, error: channelsError } = await supabaseServer.from("channels").select("id")
+  const { data: mappings, error: mappingsError } = await supabaseServer
     .from("service_channels")
     .select("service_id, channel_id")
 
@@ -125,8 +124,7 @@ async function resolveLogoUrl(logoUrl: string): Promise<string> {
   // If it's a numeric ID, fetch the media asset URL
   if (/^\d+$/.test(logoUrl)) {
     try {
-      const supabase = await createClient()
-      const { data, error } = await supabase
+      const { data, error } = await supabaseServer
         .from("media_assets")
         .select("url")
         .eq("id", Number.parseInt(logoUrl, 10))
@@ -167,8 +165,7 @@ export async function createChannel(
 
     console.log("Inserting channel with processed data:", JSON.stringify(channelData, null, 2))
 
-    const supabase = await createClient()
-    const { data, error } = await supabase.from("channels").insert([channelData]).select()
+    const { data, error } = await supabaseServer.from("channels").insert([channelData]).select()
 
     if (error) {
       console.error("Supabase error creating channel:", error)
@@ -208,8 +205,7 @@ export async function createService(
 
     console.log("Inserting service with processed data:", JSON.stringify(serviceData, null, 2))
 
-    const supabase = await createClient()
-    const { data, error } = await supabase.from("streaming_services").insert([serviceData]).select()
+    const { data, error } = await supabaseServer.from("streaming_services").insert([serviceData]).select()
 
     if (error) {
       console.error("Supabase error creating service:", error)
@@ -233,8 +229,7 @@ export async function createService(
 }
 
 export async function getServices(): Promise<StreamingService[]> {
-  const supabase = await createClient()
-  const { data, error } = await supabase.from("streaming_services").select("*").order("name")
+  const { data, error } = await supabaseServer.from("streaming_services").select("*").order("name")
 
   if (error) {
     console.error("Error fetching services:", error)
@@ -247,8 +242,7 @@ export async function getServices(): Promise<StreamingService[]> {
 export async function getServiceById(id: number): Promise<StreamingService | null> {
   console.log(`[Admin Action] Fetching service with ID: ${id}`)
   try {
-    const supabase = await createClient()
-    const { data, error } = await supabase.from("streaming_services").select("*").eq("id", id).single()
+    const { data, error } = await supabaseServer.from("streaming_services").select("*").eq("id", id).single()
 
     if (error) {
       console.error("Error fetching service:", error)
@@ -282,8 +276,7 @@ export async function updateService(
 
     console.log("Updating service with processed data:", JSON.stringify(serviceData, null, 2))
 
-    const supabase = await createClient()
-    const { error } = await supabase.from("streaming_services").update(serviceData).eq("id", id)
+    const { error } = await supabaseServer.from("streaming_services").update(serviceData).eq("id", id)
 
     if (error) {
       console.error("Error updating service:", error)
@@ -301,9 +294,8 @@ export async function updateService(
 }
 
 export async function deleteService(id: number): Promise<{ success: boolean; error?: string }> {
-  const supabase = await createClient()
   // First, delete any service-channel mappings
-  const { error: mappingError } = await supabase.from("service_channels").delete().eq("service_id", id)
+  const { error: mappingError } = await supabaseServer.from("service_channels").delete().eq("service_id", id)
 
   if (mappingError) {
     console.error("Error deleting service mappings:", mappingError)
@@ -311,7 +303,7 @@ export async function deleteService(id: number): Promise<{ success: boolean; err
   }
 
   // Then delete the service
-  const { error } = await supabase.from("streaming_services").delete().eq("id", id)
+  const { error } = await supabaseServer.from("streaming_services").delete().eq("id", id)
 
   if (error) {
     console.error("Error deleting service:", error)
@@ -329,9 +321,8 @@ export async function bulkDeleteServices(
   }
 
   try {
-    const supabase = await createClient()
     // First, delete any service-channel mappings for these services
-    const { error: mappingError } = await supabase.from("service_channels").delete().in("service_id", ids)
+    const { error: mappingError } = await supabaseServer.from("service_channels").delete().in("service_id", ids)
 
     if (mappingError) {
       console.error("Error deleting service mappings:", mappingError)
@@ -339,7 +330,7 @@ export async function bulkDeleteServices(
     }
 
     // Then delete the services
-    const { error, count } = await supabase.from("streaming_services").delete().in("id", ids).select("count")
+    const { error, count } = await supabaseServer.from("streaming_services").delete().in("id", ids).select("count")
 
     if (error) {
       console.error("Error bulk deleting services:", error)
@@ -377,8 +368,11 @@ export async function bulkUpdateServices(
       updatesData.logo_url = await resolveLogoUrl(updatesData.logo_url)
     }
 
-    const supabase = await createClient()
-    const { error, count } = await supabase.from("streaming_services").update(updatesData).in("id", ids).select("count")
+    const { error, count } = await supabaseServer
+      .from("streaming_services")
+      .update(updatesData)
+      .in("id", ids)
+      .select("count")
 
     if (error) {
       console.error("Error bulk updating services:", error)
@@ -397,8 +391,7 @@ export async function bulkUpdateServices(
 
 // Channels CRUD operations
 export async function getChannels(): Promise<Channel[]> {
-  const supabase = await createClient()
-  const { data, error } = await supabase.from("channels").select("*").order("name")
+  const { data, error } = await supabaseServer.from("channels").select("*").order("name")
 
   if (error) {
     console.error("Error fetching channels:", error)
@@ -409,8 +402,7 @@ export async function getChannels(): Promise<Channel[]> {
 }
 
 export async function getChannelById(id: number): Promise<Channel | null> {
-  const supabase = await createClient()
-  const { data, error } = await supabase.from("channels").select("*").eq("id", id).single()
+  const { data, error } = await supabaseServer.from("channels").select("*").eq("id", id).single()
 
   if (error) {
     console.error("Error fetching channel:", error)
@@ -438,8 +430,7 @@ export async function updateChannel(
 
     console.log("Updating channel with processed data:", JSON.stringify(channelData, null, 2))
 
-    const supabase = await createClient()
-    const { error } = await supabase.from("channels").update(channelData).eq("id", id)
+    const { error } = await supabaseServer.from("channels").update(channelData).eq("id", id)
 
     if (error) {
       console.error("Error updating channel:", error)
@@ -457,9 +448,8 @@ export async function updateChannel(
 }
 
 export async function deleteChannel(id: number): Promise<{ success: boolean; error?: string }> {
-  const supabase = await createClient()
   // First, delete any service-channel mappings
-  const { error: mappingError } = await supabase.from("service_channels").delete().eq("channel_id", id)
+  const { error: mappingError } = await supabaseServer.from("service_channels").delete().eq("channel_id", id)
 
   if (mappingError) {
     console.error("Error deleting channel mappings:", mappingError)
@@ -467,7 +457,7 @@ export async function deleteChannel(id: number): Promise<{ success: boolean; err
   }
 
   // Then delete the channel
-  const { error } = await supabase.from("channels").delete().eq("id", id)
+  const { error } = await supabaseServer.from("channels").delete().eq("id", id)
 
   if (error) {
     console.error("Error deleting channel:", error)
@@ -485,9 +475,8 @@ export async function bulkDeleteChannels(
   }
 
   try {
-    const supabase = await createClient()
     // First, delete any service-channel mappings for these channels
-    const { error: mappingError } = await supabase.from("service_channels").delete().in("channel_id", ids)
+    const { error: mappingError } = await supabaseServer.from("service_channels").delete().in("channel_id", ids)
 
     if (mappingError) {
       console.error("Error deleting channel mappings:", mappingError)
@@ -495,7 +484,7 @@ export async function bulkDeleteChannels(
     }
 
     // Then delete the channels
-    const { error, count } = await supabase.from("channels").delete().in("id", ids).select("count")
+    const { error, count } = await supabaseServer.from("channels").delete().in("id", ids).select("count")
 
     if (error) {
       console.error("Error bulk deleting channels:", error)
@@ -533,8 +522,7 @@ export async function bulkUpdateChannels(
       updatesData.logo_url = await resolveLogoUrl(updatesData.logo_url)
     }
 
-    const supabase = await createClient()
-    const { error, count } = await supabase.from("channels").update(updatesData).in("id", ids).select("count")
+    const { error, count } = await supabaseServer.from("channels").update(updatesData).in("id", ids).select("count")
 
     if (error) {
       console.error("Error bulk updating channels:", error)
@@ -555,9 +543,8 @@ export async function bulkUpdateChannels(
 export async function getMappings(): Promise<
   { mapping: ServiceChannel; service: StreamingService; channel: Channel }[]
 > {
-  const supabase = await createClient()
   // Get all mappings with service and channel details
-  const { data, error } = await supabase
+  const { data, error } = await supabaseServer
     .from("service_channels")
     .select(`
       *,
@@ -584,9 +571,8 @@ export async function getMappings(): Promise<
 }
 
 export async function createMapping(mapping: ServiceChannel): Promise<{ success: boolean; error?: string }> {
-  const supabase = await createClient()
   // Check if mapping already exists
-  const { data: existingMapping, error: checkError } = await supabase
+  const { data: existingMapping, error: checkError } = await supabaseServer
     .from("service_channels")
     .select("*")
     .eq("service_id", mapping.service_id)
@@ -603,7 +589,7 @@ export async function createMapping(mapping: ServiceChannel): Promise<{ success:
   }
 
   // Create the mapping
-  const { error } = await supabase.from("service_channels").insert([mapping])
+  const { error } = await supabaseServer.from("service_channels").insert([mapping])
 
   if (error) {
     console.error("Error creating mapping:", error)
@@ -619,8 +605,7 @@ export async function updateMapping(
   tier: string,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const supabase = await createClient()
-    const { error } = await supabase
+    const { error } = await supabaseServer
       .from("service_channels")
       .update({ tier })
       .eq("service_id", serviceId)
@@ -645,8 +630,7 @@ export async function deleteMapping(
   serviceId: number,
   channelId: number,
 ): Promise<{ success: boolean; error?: string }> {
-  const supabase = await createClient()
-  const { error } = await supabase
+  const { error } = await supabaseServer
     .from("service_channels")
     .delete()
     .eq("service_id", serviceId)
@@ -661,8 +645,7 @@ export async function deleteMapping(
 }
 
 export async function getChannelCategories(): Promise<string[]> {
-  const supabase = await createClient()
-  const { data, error } = await supabase.from("channels").select("category").order("category")
+  const { data, error } = await supabaseServer.from("channels").select("category").order("category")
 
   if (error) {
     console.error("Error fetching channel categories:", error)
@@ -680,8 +663,7 @@ export async function updateMappingTier(
   tier: string,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const supabase = await createClient()
-    const { error } = await supabase
+    const { error } = await supabaseServer
       .from("service_channels")
       .update({ tier })
       .eq("service_id", serviceId)
@@ -703,13 +685,12 @@ export async function bulkDeleteMappings(
   mappings: { service_id: number; channel_id: number }[],
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const supabase = await createClient()
     // Create an array of OR conditions for each mapping
     const orConditions = mappings.map((mapping) => ({
       and: [{ service_id: mapping.service_id }, { channel_id: mapping.channel_id }],
     }))
 
-    const { error } = await supabase
+    const { error } = await supabaseServer
       .from("service_channels")
       .delete()
       .or(
@@ -738,10 +719,9 @@ export async function bulkUpdateMappingTier(
   tier: string,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const supabase = await createClient()
     // Process each mapping individually
     const promises = mappings.map((mapping) =>
-      supabase
+      supabaseServer
         .from("service_channels")
         .update({ tier })
         .eq("service_id", mapping.service_id)
@@ -770,14 +750,13 @@ export async function batchCreateMappings(
   mappings: ServiceChannel[],
 ): Promise<{ success: boolean; created: number; skipped: number; error?: string }> {
   try {
-    const supabase = await createClient()
     if (!mappings.length) {
       return { success: false, created: 0, skipped: 0, error: "No mappings provided" }
     }
 
     // Check for existing mappings to avoid duplicates
     const existingMappingsPromises = mappings.map((mapping) =>
-      supabase
+      supabaseServer
         .from("service_channels")
         .select("*")
         .eq("service_id", mapping.service_id)
@@ -801,7 +780,7 @@ export async function batchCreateMappings(
     }
 
     // Insert new mappings
-    const { error, count } = await supabase.from("service_channels").insert(newMappings).select("count")
+    const { error, count } = await supabaseServer.from("service_channels").insert(newMappings).select("count")
 
     if (error) throw error
 

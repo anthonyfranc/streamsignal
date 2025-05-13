@@ -1,8 +1,9 @@
 "use server"
 
 import { revalidatePath, revalidateTag } from "next/cache"
+import { supabase } from "@/lib/supabase"
 import type { Service } from "@/types/streaming"
-import { createClient } from "@/lib/supabase-server"
+import { getSupabase } from "@/lib/supabase-server"
 
 export interface ServiceWithDetails extends Service {
   channel_count: number
@@ -10,7 +11,6 @@ export interface ServiceWithDetails extends Service {
 
 export async function getAllServicesWithDetails(): Promise<ServiceWithDetails[]> {
   try {
-    const supabase = await createClient()
     // Get all services - using streaming_services table instead of services
     const { data: services, error } = await supabase.from("streaming_services").select("*").order("name")
 
@@ -120,7 +120,6 @@ export async function getAllServicesWithDetails(): Promise<ServiceWithDetails[]>
 
 export async function getServiceGenres(): Promise<string[]> {
   try {
-    const supabase = await createClient()
     const { data, error } = await supabase.from("service_genres").select("genre").order("genre")
 
     if (error) {
@@ -145,7 +144,6 @@ export async function getServiceGenres(): Promise<string[]> {
 
 export async function getSupportedDevices(): Promise<string[]> {
   try {
-    const supabase = await createClient()
     const { data, error } = await supabase.from("service_devices").select("device").order("device")
 
     if (error) {
@@ -247,7 +245,7 @@ export async function getFeaturedServices(limit = 3) {
 
 // Example of how to update one of the mutation functions:
 export async function createService(formData: FormData) {
-  const supabase = await createClient()
+  const supabase = getSupabase()
 
   // Extract form data...
 
@@ -266,7 +264,7 @@ export async function createService(formData: FormData) {
 }
 
 export async function updateService(id: number, formData: FormData) {
-  const supabase = await createClient()
+  const supabase = getSupabase()
 
   // Extract form data...
 
@@ -287,7 +285,7 @@ export async function updateService(id: number, formData: FormData) {
 }
 
 export async function deleteService(id: number) {
-  const supabase = await createClient()
+  const supabase = getSupabase()
 
   const { error } = await supabase.from("streaming_services").delete().eq("id", id)
 

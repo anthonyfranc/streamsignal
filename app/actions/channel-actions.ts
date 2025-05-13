@@ -1,9 +1,9 @@
 "use server"
 
 import { revalidatePath, revalidateTag } from "next/cache"
+import { supabase } from "@/lib/supabase"
 import type { Channel } from "@/types/streaming"
 import { getSupabase } from "@/lib/supabase-server"
-import { createClient } from "@/lib/supabase-server"
 
 export interface ChannelWithServices extends Channel {
   services: {
@@ -34,7 +34,6 @@ export interface Program {
 // New function to get channels for a specific service
 export async function getChannelsForService(serviceId: number): Promise<Channel[]> {
   try {
-    const supabase = await createClient()
     const { data, error } = await supabase
       .from("service_channels")
       .select(`
@@ -107,7 +106,6 @@ export async function getFeaturedChannels(limit = 3) {
 
 export async function getAllChannelsWithServices(): Promise<ChannelWithServices[]> {
   try {
-    const supabase = await createClient()
     const { data, error } = await supabase
       .from("channels")
       .select(`
@@ -162,7 +160,6 @@ export async function getAllChannelsWithServices(): Promise<ChannelWithServices[
 
 export async function searchChannels(query: string, category: string): Promise<ChannelWithServices[]> {
   try {
-    const supabase = await createClient()
     let dbQuery = supabase
       .from("channels")
       .select(`
@@ -227,7 +224,6 @@ export async function searchChannels(query: string, category: string): Promise<C
 
 export async function getChannelCategories(): Promise<string[]> {
   try {
-    const supabase = await createClient()
     const { data, error } = await supabase.from("channels").select("category").order("category")
 
     if (error) {
@@ -250,7 +246,6 @@ export async function getChannelCategories(): Promise<string[]> {
 
 export async function getChannelById(id: number): Promise<ChannelWithServices | null> {
   try {
-    const supabase = await createClient()
     const { data, error } = await supabase
       .from("channels")
       .select(`
@@ -342,7 +337,6 @@ export async function getChannelPrograms(channelId: number): Promise<Program[]> 
 
 export async function getSimilarChannels(channelId: number): Promise<ChannelWithServices[]> {
   try {
-    const supabase = await createClient()
     // Get the category of the current channel
     const { data: currentChannel, error: channelError } = await supabase
       .from("channels")
@@ -413,7 +407,7 @@ export async function getSimilarChannels(channelId: number): Promise<ChannelWith
 
 // Example of how to update one of the mutation functions:
 export async function createChannel(formData: FormData) {
-  const supabase = await getSupabase()
+  const supabase = getSupabase()
 
   // Extract form data...
   const name = formData.get("name") as string
@@ -443,7 +437,7 @@ export async function createChannel(formData: FormData) {
 }
 
 export async function updateChannel(id: number, formData: FormData) {
-  const supabase = await getSupabase()
+  const supabase = getSupabase()
 
   // Extract form data...
   const name = formData.get("name") as string
@@ -473,7 +467,7 @@ export async function updateChannel(id: number, formData: FormData) {
 }
 
 export async function deleteChannel(id: number) {
-  const supabase = await getSupabase()
+  const supabase = getSupabase()
 
   const { error } = await supabase.from("channels").delete().eq("id", id)
 

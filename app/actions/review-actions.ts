@@ -8,7 +8,7 @@ import { revalidatePath } from "next/cache"
  */
 export async function submitReview(formData: FormData) {
   try {
-    const supabase = await createClient()
+    const supabase = createClient()
 
     // Get the current user
     const {
@@ -58,7 +58,7 @@ export async function submitReview(formData: FormData) {
  */
 export async function submitComment(formData: FormData) {
   try {
-    const supabase = await createClient()
+    const supabase = createClient()
 
     // Get the current user
     const {
@@ -101,113 +101,6 @@ export async function submitComment(formData: FormData) {
   } catch (error) {
     console.error("Error in submitComment:", error)
     return { error: "An unexpected error occurred" }
-  }
-}
-
-export async function submitReply(formData: FormData) {
-  try {
-    const supabase = await createClient()
-
-    // Get the current user
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-    if (!user) {
-      return { error: "You must be logged in to submit a reply" }
-    }
-
-    // Get form data
-    const reviewId = formData.get("reviewId") as string
-    const content = formData.get("content") as string
-    const parentId = formData.get("parentId") as string
-    const serviceId = formData.get("serviceId") as string
-
-    if (!reviewId || !content || !parentId || !serviceId) {
-      return { error: "Missing required fields" }
-    }
-
-    // Insert the comment
-    const { data, error } = await supabase
-      .from("review_comments")
-      .insert({
-        review_id: reviewId,
-        user_id: user.id,
-        content,
-        parent_id: parentId,
-      })
-      .select()
-
-    if (error) {
-      console.error("Error submitting reply:", error)
-      return { error: "Failed to submit reply" }
-    }
-
-    // Revalidate the service page
-    revalidatePath(`/services/${serviceId}`)
-
-    return { success: true, comment: data[0] }
-  } catch (error) {
-    console.error("Error in submitReply:", error)
-    return { error: "An unexpected error occurred" }
-  }
-}
-
-/**
- * Update an existing comment
- */
-export async function updateComment(commentId: string, content: string) {
-  try {
-    const supabase = await createClient()
-
-    // Get the current user
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser()
-
-    if (userError || !user) {
-      throw new Error("You must be logged in to edit a comment")
-    }
-
-    // Get the comment to verify ownership
-    const { data: comment, error: commentError } = await supabase
-      .from("review_comments")
-      .select("*")
-      .eq("id", commentId)
-      .single()
-
-    if (commentError || !comment) {
-      throw new Error("Comment not found")
-    }
-
-    // Verify the user owns the comment
-    if (comment.user_id !== user.id) {
-      throw new Error("You can only edit your own comments")
-    }
-
-    // Update the comment
-    const { error: updateError } = await supabase
-      .from("review_comments")
-      .update({
-        content,
-        edited: true,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", commentId)
-
-    if (updateError) {
-      throw new Error(`Error updating comment: ${updateError.message}`)
-    }
-
-    revalidatePath("/services/[id]")
-
-    return { success: true }
-  } catch (error) {
-    console.error("Error updating comment:", error)
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "An unknown error occurred",
-    }
   }
 }
 

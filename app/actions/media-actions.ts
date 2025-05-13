@@ -1,7 +1,8 @@
 "use server"
+
+import { supabaseServer } from "@/lib/supabase"
 import { revalidatePath } from "next/cache"
 import { deleteFromBlob } from "@/lib/blob-storage"
-import { createClient } from "@/lib/supabase-server"
 
 export interface MediaAsset {
   id: number
@@ -49,8 +50,7 @@ export async function getMediaAssets(options?: {
   offset?: number
 }): Promise<{ assets: MediaAsset[]; total: number }> {
   try {
-    const supabase = await createClient()
-    let query = supabase.from("media_assets").select("*", { count: "exact" })
+    let query = supabaseServer.from("media_assets").select("*", { count: "exact" })
 
     // Apply filters if provided
     if (options?.category) {
@@ -92,8 +92,7 @@ export async function getMediaAssets(options?: {
 // Get a single media asset by ID
 export async function getMediaAssetById(id: number): Promise<MediaAsset | null> {
   try {
-    const supabase = await createClient()
-    const { data, error } = await supabase.from("media_assets").select("*").eq("id", id).single()
+    const { data, error } = await supabaseServer.from("media_assets").select("*").eq("id", id).single()
 
     if (error) {
       console.error("Error fetching media asset:", error)
@@ -112,8 +111,7 @@ export async function createMediaAsset(
   asset: Omit<MediaAsset, "id" | "created_at" | "updated_at">,
 ): Promise<MediaUploadResult> {
   try {
-    const supabase = await createClient()
-    const { data, error } = await supabase.from("media_assets").insert([asset]).select()
+    const { data, error } = await supabaseServer.from("media_assets").insert([asset]).select()
 
     if (error) {
       console.error("Error creating media asset:", error)
@@ -137,14 +135,13 @@ export async function updateMediaAsset(
   updates: Partial<Omit<MediaAsset, "id" | "created_at" | "updated_at">>,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const supabase = await createClient()
     // Add updated_at timestamp
     const updatesWithTimestamp = {
       ...updates,
       updated_at: new Date().toISOString(),
     }
 
-    const { error } = await supabase.from("media_assets").update(updatesWithTimestamp).eq("id", id)
+    const { error } = await supabaseServer.from("media_assets").update(updatesWithTimestamp).eq("id", id)
 
     if (error) {
       console.error("Error updating media asset:", error)
@@ -165,9 +162,11 @@ export async function updateMediaAsset(
 // Delete a media asset
 export async function deleteMediaAsset(id: number): Promise<{ success: boolean; error?: string }> {
   try {
-    const supabase = await createClient()
     // First check if the asset is in use
-    const { data: usageData, error: usageError } = await supabase.from("media_usage").select("id").eq("media_id", id)
+    const { data: usageData, error: usageError } = await supabaseServer
+      .from("media_usage")
+      .select("id")
+      .eq("media_id", id)
 
     if (usageError) {
       console.error("Error checking media usage:", usageError)
@@ -208,7 +207,7 @@ export async function deleteMediaAsset(id: number): Promise<{ success: boolean; 
     }
 
     // If not in use, delete the asset from the database
-    const { error } = await supabase.from("media_assets").delete().eq("id", id)
+    const { error } = await supabaseServer.from("media_assets").delete().eq("id", id)
 
     if (error) {
       console.error("Error deleting media asset:", error)
@@ -234,9 +233,8 @@ export async function trackMediaUsage(
   usageType: string,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const supabase = await createClient()
     // Check if this usage already exists
-    const { data: existingUsage, error: checkError } = await supabase
+    const { data: existingUsage, error: checkError } = await supabaseServer
       .from("media_usage")
       .select("id")
       .eq("media_id", mediaId)
@@ -256,7 +254,7 @@ export async function trackMediaUsage(
     }
 
     // Create new usage record
-    const { error } = await supabase.from("media_usage").insert([
+    const { error } = await supabaseServer.from("media_usage").insert([
       {
         media_id: mediaId,
         entity_type: entityType,
@@ -288,8 +286,7 @@ export async function removeMediaUsage(
   usageType: string,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const supabase = await createClient()
-    const { error } = await supabase
+    const { error } = await supabaseServer
       .from("media_usage")
       .delete()
       .eq("media_id", mediaId)
@@ -315,8 +312,7 @@ export async function removeMediaUsage(
 // Get media categories with counts
 export async function getMediaCategories(): Promise<MediaCategory[]> {
   try {
-    const supabase = await createClient()
-    const { data, error } = await supabase.from("media_assets").select("category").order("category")
+    const { data, error } = await supabaseServer.from("media_assets").select("category").order("category")
 
     if (error) {
       console.error("Error fetching media categories:", error)
@@ -344,8 +340,7 @@ export async function getMediaCategories(): Promise<MediaCategory[]> {
 // Get media usage for an asset
 export async function getMediaUsageByAssetId(mediaId: number): Promise<MediaUsage[]> {
   try {
-    const supabase = await createClient()
-    const { data, error } = await supabase
+    const { data, error } = await supabaseServer
       .from("media_usage")
       .select("*")
       .eq("media_id", mediaId)
@@ -366,8 +361,7 @@ export async function getMediaUsageByAssetId(mediaId: number): Promise<MediaUsag
 // Get media assets used by an entity
 export async function getMediaAssetsByEntity(entityType: string, entityId: number): Promise<MediaAsset[]> {
   try {
-    const supabase = await createClient()
-    const { data, error } = await supabase
+    const { data, error } = await supabaseServer
       .from("media_usage")
       .select(`
         media_id,

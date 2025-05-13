@@ -4,7 +4,7 @@ import type React from "react"
 
 import { useState, useCallback, memo } from "react"
 import { formatDistanceToNow } from "date-fns"
-import { ThumbsUp, MessageSquare, Edit2 } from "lucide-react"
+import { ThumbsUp, MessageSquare } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -24,55 +24,15 @@ export const ReviewComment = memo(function ReviewComment({
   serviceId,
   isOptimistic = false,
 }: ReviewCommentProps) {
-  const { currentUser, userProfile, submitReply, reactToComment, userReactions, isSubmitting, updateComment } =
-    useReviews()
+  const { currentUser, userProfile, submitReply, reactToComment, userReactions, isSubmitting } = useReviews()
   const [showReplyForm, setShowReplyForm] = useState(false)
   const [replyContent, setReplyContent] = useState("")
   const [localSubmitting, setLocalSubmitting] = useState(false)
-
-  const [isEditing, setIsEditing] = useState(false)
-  const [editContent, setEditContent] = useState("")
-  const [editSubmitting, setEditSubmitting] = useState(false)
 
   // Format date with error handling
   const formatDate = (dateString: string | null | undefined) => {
     return safeFormatDate(dateString, (date) => formatDistanceToNow(date, { addSuffix: true }))
   }
-
-  const handleEditSubmit = useCallback(
-    async (e: React.FormEvent) => {
-      e.preventDefault()
-      if (!editContent.trim() || !currentUser) return
-
-      setEditSubmitting(true)
-      try {
-        const formData = new FormData()
-        formData.append("commentId", String(comment.id))
-        formData.append("content", editContent)
-        formData.append("serviceId", String(serviceId))
-
-        try {
-          const result = await updateComment(formData)
-
-          if (result.success) {
-            setIsEditing(false)
-          } else {
-            console.error("Error updating comment:", result.error)
-            // Show error to user
-            alert(`Failed to update comment: ${result.error || "Unknown error"}`)
-          }
-        } catch (error) {
-          console.error("Exception when updating comment:", error)
-          alert("An unexpected error occurred while updating your comment")
-        }
-      } catch (error) {
-        console.error("Error submitting edit:", error)
-      } finally {
-        setEditSubmitting(false)
-      }
-    },
-    [comment, editContent, currentUser, serviceId, updateComment],
-  )
 
   // Handle reply submission
   const handleReplySubmit = useCallback(
@@ -120,17 +80,6 @@ export const ReviewComment = memo(function ReviewComment({
     return userReactions[`comment_${commentId}`] || null
   }
 
-  const isCommentAuthor = useCallback(() => {
-    if (!currentUser) return false
-    return currentUser.id === comment.user_id
-  }, [currentUser, comment.user_id])
-
-  const handleStartEdit = useCallback(() => {
-    setEditContent(comment.content)
-    setIsEditing(true)
-    setShowReplyForm(false) // Close reply form if open
-  }, [comment.content])
-
   // Get user display name and avatar
   const userDisplayName =
     userProfile?.display_name ||
@@ -146,7 +95,6 @@ export const ReviewComment = memo(function ReviewComment({
   const content = safeString(comment?.content, "")
   const likes = safeNumber(comment?.likes, 0)
   const createdAt = safeString(comment?.created_at, new Date().toISOString())
-  const updatedAt = comment?.updated_at || null
   const nestingLevel = safeNumber(comment?.nesting_level, 1)
   const replies = Array.isArray(comment?.replies) ? comment.replies : []
 
@@ -162,42 +110,9 @@ export const ReviewComment = memo(function ReviewComment({
           <div className="flex items-center gap-2">
             <span className="font-medium text-sm">{authorName}</span>
             <span className="text-xs text-muted-foreground">{formatDate(createdAt)}</span>
-            {updatedAt && <span className="text-xs text-muted-foreground italic">(edited)</span>}
           </div>
 
-          {isEditing ? (
-            <form onSubmit={handleEditSubmit} className="mt-2 space-y-2">
-              <Textarea
-                value={editContent}
-                onChange={(e) => setEditContent(e.target.value)}
-                className="min-h-[80px] resize-none text-sm rounded-xl py-2 bg-muted/30"
-                disabled={editSubmitting}
-                autoFocus
-              />
-              <div className="flex justify-end gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-xs"
-                  onClick={() => setIsEditing(false)}
-                  disabled={editSubmitting}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  size="sm"
-                  className={cn("h-7 text-xs bg-primary hover:bg-primary/90", editSubmitting && "opacity-70")}
-                  disabled={editSubmitting || !editContent.trim() || editContent === comment.content}
-                >
-                  {editSubmitting ? "Saving..." : "Save Changes"}
-                </Button>
-              </div>
-            </form>
-          ) : (
-            <p className="text-sm mt-1">{content}</p>
-          )}
+          <p className="text-sm mt-1">{content}</p>
 
           <div className="flex items-center gap-3 mt-2">
             <button
@@ -220,21 +135,10 @@ export const ReviewComment = memo(function ReviewComment({
               <button
                 className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"
                 onClick={() => setShowReplyForm(!showReplyForm)}
-                disabled={isOptimistic || isEditing}
+                disabled={isOptimistic}
               >
                 <MessageSquare className="h-3.5 w-3.5" />
                 <span>Reply</span>
-              </button>
-            )}
-
-            {isCommentAuthor() && !isEditing && (
-              <button
-                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"
-                onClick={handleStartEdit}
-                disabled={isOptimistic}
-              >
-                <Edit2 className="h-3.5 w-3.5" />
-                <span>Edit</span>
               </button>
             )}
           </div>
@@ -289,6 +193,7 @@ export const ReviewComment = memo(function ReviewComment({
         </div>
       </div>
 
+      {/* Render replies */}
       {replies.length > 0 && (
         <div className="pl-8 space-y-3 border-l border-muted ml-4">
           {replies.map((reply) => (
