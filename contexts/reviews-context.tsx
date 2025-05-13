@@ -146,7 +146,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
             const { data: profile } = await supabase
               .from("user_profiles")
               .select("*")
-              .eq("user_id", user.id)
+              .eq("id", user.id)
               .maybeSingle()
 
             setUserProfile(profile || null)
