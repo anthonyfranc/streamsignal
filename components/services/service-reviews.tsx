@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { formatDistanceToNow } from "date-fns"
 import { Star, ThumbsUp, MessageSquare, MoreHorizontal } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -88,92 +88,111 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
   }, [currentUser, userProfile])
 
   // Filter reviews based on selected filter
-  const filteredReviews = (Array.isArray(reviews) ? reviews : []).filter((review) => {
-    if (!review || typeof review !== "object") return false
+  const filteredReviews = useMemo(() => {
+    return (Array.isArray(reviews) ? reviews : []).filter((review) => {
+      if (!review || typeof review !== "object") return false
 
-    const reviewRating = safeNumber(review.rating, 0)
+      const reviewRating = safeNumber(review.rating, 0)
 
-    if (reviewFilter === "all") return true
-    if (reviewFilter === "positive") return reviewRating >= 4
-    if (reviewFilter === "neutral") return reviewRating === 3
-    if (reviewFilter === "negative") return reviewRating <= 2
-    return true
-  })
+      if (reviewFilter === "all") return true
+      if (reviewFilter === "positive") return reviewRating >= 4
+      if (reviewFilter === "neutral") return reviewRating === 3
+      if (reviewFilter === "negative") return reviewRating <= 2
+      return true
+    })
+  }, [reviews, reviewFilter])
 
   // Handle review submission
-  const handleReviewSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const handleReviewSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault()
 
-    if (!currentUser) {
-      setError("You must be logged in to submit a review")
-      return
-    }
+      if (!currentUser) {
+        setError("You must be logged in to submit a review")
+        return
+      }
 
-    if (rating === 0) {
-      setError("Please select a rating")
-      return
-    }
+      if (rating === 0) {
+        setError("Please select a rating")
+        return
+      }
 
-    if (!title.trim() || !content.trim()) {
-      setError("Title and review content are required")
-      return
-    }
+      if (!title.trim() || !content.trim()) {
+        setError("Title and review content are required")
+        return
+      }
 
-    setIsSubmitting(true)
-    setError(null)
+      setIsSubmitting(true)
+      setError(null)
 
-    const formData = new FormData()
-    formData.append("serviceId", serviceId.toString())
-    formData.append("rating", rating.toString())
-    formData.append("title", title)
-    formData.append("content", content)
+      const formData = new FormData()
+      formData.append("serviceId", serviceId.toString())
+      formData.append("rating", rating.toString())
+      formData.append("title", title)
+      formData.append("content", content)
 
-    if (interfaceRating > 0) formData.append("interfaceRating", interfaceRating.toString())
-    if (reliabilityRating > 0) formData.append("reliabilityRating", reliabilityRating.toString())
-    if (contentRating > 0) formData.append("contentRating", contentRating.toString())
-    if (valueRating > 0) formData.append("valueRating", valueRating.toString())
+      if (interfaceRating > 0) formData.append("interfaceRating", interfaceRating.toString())
+      if (reliabilityRating > 0) formData.append("reliabilityRating", reliabilityRating.toString())
+      if (contentRating > 0) formData.append("contentRating", contentRating.toString())
+      if (valueRating > 0) formData.append("valueRating", valueRating.toString())
 
-    const result = await submitReview(formData)
+      const result = await submitReview(formData)
 
-    setIsSubmitting(false)
+      setIsSubmitting(false)
 
-    if (!result.success) {
-      setError(result.error)
-      return
-    }
+      if (!result.success) {
+        setError(result.error)
+        return
+      }
 
-    // Reset form
-    setRating(0)
-    setTitle("")
-    setContent("")
-    setInterfaceRating(0)
-    setReliabilityRating(0)
-    setContentRating(0)
-    setValueRating(0)
-    setShowReviewForm(false)
-  }
+      // Reset form
+      setRating(0)
+      setTitle("")
+      setContent("")
+      setInterfaceRating(0)
+      setReliabilityRating(0)
+      setContentRating(0)
+      setValueRating(0)
+      setShowReviewForm(false)
+    },
+    [
+      currentUser,
+      rating,
+      title,
+      content,
+      interfaceRating,
+      reliabilityRating,
+      contentRating,
+      valueRating,
+      serviceId,
+      submitReview,
+    ],
+  )
 
   // Toggle review content expansion
-  const toggleReviewExpansion = (reviewId: number) => {
+  const toggleReviewExpansion = useCallback((reviewId: number) => {
     setExpandedReviews((prev) => ({
       ...prev,
       [reviewId]: !prev[reviewId],
     }))
-  }
+  }, [])
 
   // Toggle comments visibility
-  const toggleComments = (reviewId: number) => {
+  const toggleComments = useCallback((reviewId: number) => {
     setExpandedComments((prev) => ({
       ...prev,
       [reviewId]: !prev[reviewId],
     }))
-  }
+  }, [])
 
   // Handle review reaction
-  const handleReviewReaction = async (reviewId: number, reactionType: string) => {
-    if (!currentUser) return
-    await reactToReview(reviewId, reactionType)
-  }
+  const handleReviewReaction = useCallback(
+    async (reviewId: number, reactionType: string) => {
+      if (!currentUser) return
+      await reactToReview(reviewId, reactionType)
+    },
+    [currentUser, reactToReview],
+  )
 
   // Format date - with error handling
   const formatDate = (dateString: string | null | undefined) => {

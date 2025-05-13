@@ -2,20 +2,23 @@
 
 import type React from "react"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback, memo } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { ReviewComment } from "./review-comment"
 import { useReviews } from "@/contexts/reviews-context"
-import { safeInitials, safeNumber } from "@/lib/data-safety-utils"
+import { safeInitials } from "@/lib/data-safety-utils"
 
 interface ReviewCommentsSectionProps {
   reviewId: number
   serviceId: number
 }
 
-export function ReviewCommentsSection({ reviewId, serviceId }: ReviewCommentsSectionProps) {
+export const ReviewCommentsSection = memo(function ReviewCommentsSection({
+  reviewId,
+  serviceId,
+}: ReviewCommentsSectionProps) {
   const { comments, currentUser, userProfile, fetchComments, submitComment } = useReviews()
   const [commentContent, setCommentContent] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -37,29 +40,35 @@ export function ReviewCommentsSection({ reviewId, serviceId }: ReviewCommentsSec
     loadComments()
   }, [reviewId, fetchComments])
 
-  // Handle comment submission
-  const handleCommentSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!commentContent.trim() || !currentUser) return
+  // Handle comment submission with optimistic updates
+  const handleCommentSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault()
+      if (!commentContent.trim() || !currentUser) return
 
-    setIsSubmitting(true)
-    try {
-      const formData = new FormData()
-      formData.append("reviewId", String(reviewId))
-      formData.append("content", commentContent)
-      formData.append("serviceId", String(serviceId))
+      setIsSubmitting(true)
+      try {
+        const formData = new FormData()
+        formData.append("reviewId", String(reviewId))
+        formData.append("content", commentContent)
+        formData.append("serviceId", String(serviceId))
 
-      const result = await submitComment(formData)
-
-      if (result.success) {
+        // Reset the input field immediately for better UX
         setCommentContent("")
+
+        const result = await submitComment(formData)
+
+        if (!result.success) {
+          console.error("Error submitting comment:", result.error)
+        }
+      } catch (error) {
+        console.error("Error submitting comment:", error)
+      } finally {
+        setIsSubmitting(false)
       }
-    } catch (error) {
-      console.error("Error submitting comment:", error)
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
+    },
+    [commentContent, currentUser, reviewId, serviceId, submitComment],
+  )
 
   // Get the comments for this review
   const reviewComments = comments[reviewId] || []
@@ -104,7 +113,7 @@ export function ReviewCommentsSection({ reviewId, serviceId }: ReviewCommentsSec
         </form>
       )}
 
-      {isLoading ? (
+      {isLoading && reviewComments.length === 0 ? (
         <div className="text-center py-4">
           <p className="text-sm text-muted-foreground">Loading comments...</p>
         </div>
@@ -115,10 +124,10 @@ export function ReviewCommentsSection({ reviewId, serviceId }: ReviewCommentsSec
       ) : (
         <div className="space-y-4">
           {reviewComments.map((comment) => (
-            <ReviewComment key={safeNumber(comment?.id, 0)} comment={comment} serviceId={serviceId} />
+            <ReviewComment key={`comment-${comment?.id}`} comment={comment} serviceId={serviceId} />
           ))}
         </div>
       )}
     </div>
   )
-}
+})

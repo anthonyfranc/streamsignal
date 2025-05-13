@@ -1,18 +1,19 @@
 export interface ReviewComment {
-  id: number
+  id: number | string
   review_id: number | null
   parent_comment_id: number | null
   user_id: string
   author_name: string
-  author_avatar?: string | null
+  author_avatar: string | null
   content: string
   likes: number
   dislikes: number
   created_at: string
-  updated_at: string | null
+  updated_at?: string | null
   nesting_level: number
   replies: ReviewComment[]
-  user_reaction: "like" | "dislike" | null
+  user_reaction?: string | null
+  isOptimistic?: boolean
 }
 
 export interface ServiceReview {
@@ -34,5 +35,21 @@ export interface ServiceReview {
 }
 
 // Add utility types for safer data handling
-export type SafeReviewComment = Partial<ReviewComment> & { id: number }
+export interface SafeReviewComment {
+  id: number | string
+  review_id?: number | null
+  parent_comment_id?: number | null
+  user_id?: string
+  author_name?: string
+  author_avatar?: string | null
+  content?: string
+  likes?: number
+  dislikes?: number
+  created_at?: string
+  updated_at?: string | null
+  nesting_level?: number
+  replies?: ReviewComment[]
+  user_reaction?: string | null
+  isOptimistic?: boolean
+}
 export type SafeServiceReview = Partial<ServiceReview> & { id: number; service_id: number }

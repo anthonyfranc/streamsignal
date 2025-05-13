@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useState, memo } from "react"
 import { formatDistanceToNow } from "date-fns"
 import { ThumbsUp, ThumbsDown, Reply, MoreHorizontal } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -18,7 +18,7 @@ interface ReviewCommentProps {
   serviceId: number
 }
 
-export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
+export const ReviewComment = memo(function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
   const { currentUser, submitReply, reactToComment } = useReviews()
   const [isReplying, setIsReplying] = useState(false)
   const [replyContent, setReplyContent] = useState("")
@@ -41,6 +41,7 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
       formData.append("content", replyContent)
       formData.append("serviceId", String(safeNumber(serviceId, 0)))
       formData.append("nestingLevel", String(safeNumber(comment?.nesting_level, 1)))
+      formData.append("reviewId", String(safeNumber(comment?.review_id, 0)))
 
       const result = await submitReply(formData)
 
@@ -71,6 +72,7 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
   const createdAt = safeString(comment?.created_at, new Date().toISOString())
   const userReaction = comment?.user_reaction || null
   const replies = Array.isArray(comment?.replies) ? comment.replies : []
+  const isOptimistic = comment?.isOptimistic || false
 
   return (
     <div className="space-y-3">
@@ -81,7 +83,7 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
         </Avatar>
 
         <div className="flex-1 space-y-1">
-          <div className="bg-muted/50 rounded-2xl px-3 py-2">
+          <div className={`bg-muted/50 rounded-2xl px-3 py-2 ${isOptimistic ? "opacity-70" : ""}`}>
             <div className="flex items-center justify-between">
               <h5 className="font-medium text-sm">{authorName}</h5>
               <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100">
@@ -98,6 +100,7 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
                 userReaction === "like" ? "text-primary font-medium" : "text-muted-foreground",
               )}
               onClick={() => handleReaction("like")}
+              disabled={isOptimistic}
             >
               <ThumbsUp className="h-3.5 w-3.5" />
               {likes > 0 && <span>{likes}</span>}
@@ -109,12 +112,13 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
                 userReaction === "dislike" ? "text-primary font-medium" : "text-muted-foreground",
               )}
               onClick={() => handleReaction("dislike")}
+              disabled={isOptimistic}
             >
               <ThumbsDown className="h-3.5 w-3.5" />
               {dislikes > 0 && <span>{dislikes}</span>}
             </button>
 
-            {nestingLevel < 3 && (
+            {nestingLevel < 3 && !isOptimistic && (
               <button
                 className="text-xs text-muted-foreground hover:text-primary transition-colors flex items-center gap-1"
                 onClick={() => setIsReplying(!isReplying)}
@@ -124,7 +128,7 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
               </button>
             )}
 
-            <span className="text-xs text-muted-foreground">{formatDate(createdAt)}</span>
+            <span className="text-xs text-muted-foreground">{isOptimistic ? "Posting..." : formatDate(createdAt)}</span>
           </div>
 
           {isReplying && (
@@ -164,10 +168,10 @@ export function ReviewComment({ comment, serviceId }: ReviewCommentProps) {
       {replies.length > 0 && (
         <div className="pl-6 space-y-3 border-l-2 border-muted ml-3">
           {replies.map((reply) => (
-            <ReviewComment key={safeNumber(reply?.id, 0)} comment={reply} serviceId={serviceId} />
+            <ReviewComment key={`reply-${safeNumber(reply?.id, 0)}`} comment={reply} serviceId={serviceId} />
           ))}
         </div>
       )}
     </div>
   )
-}
+})

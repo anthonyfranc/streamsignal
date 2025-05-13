@@ -83,7 +83,7 @@ function processSafeComment(comment: any, userReaction: string | null = null): S
   }
 
   return {
-    id: safeNumber(comment.id, 0),
+    id: comment.id !== undefined ? comment.id : 0,
     review_id: comment.review_id !== null ? safeNumber(comment.review_id, 0) : null,
     parent_comment_id: comment.parent_comment_id !== null ? safeNumber(comment.parent_comment_id, 0) : null,
     user_id: safeString(comment.user_id, ""),
@@ -97,6 +97,7 @@ function processSafeComment(comment: any, userReaction: string | null = null): S
     nesting_level: safeNumber(comment.nesting_level, 1),
     replies: Array.isArray(comment.replies) ? comment.replies : [],
     user_reaction: userReaction,
+    isOptimistic: !!comment.isOptimistic,
   }
 }
 
@@ -143,11 +144,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
           try {
             // Fetch user profile
-            const { data: profile } = await supabase
-              .from("user_profiles")
-              .select("*")
-              .eq("id", user.id)
-              .maybeSingle()
+            const { data: profile } = await supabase.from("user_profiles").select("*").eq("id", user.id).maybeSingle()
 
             setUserProfile(profile || null)
           } catch (error) {
@@ -428,6 +425,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
       const reviewId = safeNumber(formData.get("reviewId"), 0)
       const content = safeString(formData.get("content"), "")
+      const serviceId = safeNumber(formData.get("serviceId"), 0)
 
       if (reviewId === 0 || !content.trim()) {
         return { success: false, error: "Missing required fields" }
@@ -441,6 +439,35 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         const authorAvatar =
           safeGet(userProfile, "avatar_url", null) || safeGet(currentUser, "user_metadata.avatar_url", null)
 
+        // Create optimistic comment
+        const optimisticCommentId = `temp-${Date.now()}`
+        const optimisticComment: ReviewComment = {
+          id: optimisticCommentId,
+          review_id: reviewId,
+          parent_comment_id: null,
+          user_id: currentUser.id,
+          author_name: authorName,
+          author_avatar: authorAvatar || "/placeholder.svg",
+          content,
+          likes: 0,
+          dislikes: 0,
+          created_at: new Date().toISOString(),
+          nesting_level: 1,
+          replies: [],
+          user_reaction: null,
+          isOptimistic: true, // Flag to identify optimistic updates
+        }
+
+        // Update UI optimistically
+        setComments((prev) => {
+          const existingComments = prev[reviewId] || []
+          return {
+            ...prev,
+            [reviewId]: [...existingComments, optimisticComment],
+          }
+        })
+
+        // Perform actual API call
         const { data, error } = await supabase
           .from("review_comments")
           .insert({
@@ -458,10 +485,20 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
         if (error) {
           console.error("Error submitting comment:", error)
+
+          // Revert optimistic update on error
+          setComments((prev) => {
+            const existingComments = prev[reviewId] || []
+            return {
+              ...prev,
+              [reviewId]: existingComments.filter((c) => c.id !== optimisticCommentId),
+            }
+          })
+
           return { success: false, error: error.message }
         }
 
-        // Update comments state with the new comment
+        // Replace optimistic comment with real one
         if (data && data[0]) {
           const newComment = processSafeComment(data[0], null) as ReviewComment
 
@@ -469,7 +506,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
             const existingComments = prev[reviewId] || []
             return {
               ...prev,
-              [reviewId]: [...existingComments, newComment],
+              [reviewId]: existingComments.map((c) => (c.id === optimisticCommentId ? newComment : c)),
             }
           })
         }
@@ -493,6 +530,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       const parentCommentId = safeNumber(formData.get("parentCommentId"), 0)
       const content = safeString(formData.get("content"), "")
       const nestingLevel = safeNumber(formData.get("nestingLevel"), 1) + 1
+      const reviewId = safeNumber(formData.get("reviewId"), 0)
 
       if (parentCommentId === 0 || !content.trim()) {
         return { success: false, error: "Missing required fields" }
@@ -511,6 +549,83 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         const authorAvatar =
           safeGet(userProfile, "avatar_url", null) || safeGet(currentUser, "user_metadata.avatar_url", null)
 
+        // Create optimistic reply
+        const optimisticReplyId = `temp-${Date.now()}`
+        const optimisticReply: ReviewComment = {
+          id: optimisticReplyId,
+          review_id: null,
+          parent_comment_id: parentCommentId,
+          user_id: currentUser.id,
+          author_name: authorName,
+          author_avatar: authorAvatar || "/placeholder.svg",
+          content,
+          likes: 0,
+          dislikes: 0,
+          created_at: new Date().toISOString(),
+          nesting_level: nestingLevel,
+          replies: [],
+          user_reaction: null,
+          isOptimistic: true, // Flag to identify optimistic updates
+        }
+
+        // Update UI optimistically
+        setComments((prev) => {
+          const updateReplies = (commentList: ReviewComment[]): ReviewComment[] => {
+            return commentList.map((comment) => {
+              if (comment.id === parentCommentId) {
+                return {
+                  ...comment,
+                  replies: [...(comment.replies || []), optimisticReply],
+                }
+              }
+              if (comment.replies && comment.replies.length > 0) {
+                return {
+                  ...comment,
+                  replies: updateReplies(comment.replies),
+                }
+              }
+              return comment
+            })
+          }
+
+          // If we know the reviewId
+          if (reviewId) {
+            return {
+              ...prev,
+              [reviewId]: updateReplies(prev[reviewId] || []),
+            }
+          }
+
+          // Find the review ID for this comment if not provided
+          for (const [revId, commentsList] of Object.entries(prev)) {
+            let found = false
+            const findParentComment = (commentList: ReviewComment[]): boolean => {
+              for (const comment of commentList) {
+                if (comment.id === parentCommentId) {
+                  found = true
+                  return true
+                }
+                if (comment.replies && comment.replies.length > 0) {
+                  if (findParentComment(comment.replies)) {
+                    return true
+                  }
+                }
+              }
+              return false
+            }
+
+            if (findParentComment(commentsList)) {
+              return {
+                ...prev,
+                [revId]: updateReplies(prev[revId] || []),
+              }
+            }
+          }
+
+          return prev
+        })
+
+        // Perform actual API call
         const { data, error } = await supabase
           .from("review_comments")
           .insert({
@@ -528,34 +643,39 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
         if (error) {
           console.error("Error submitting reply:", error)
+
+          // Revert optimistic update on error
+          setComments((prev) => {
+            const removeOptimisticReply = (commentList: ReviewComment[]): ReviewComment[] => {
+              return commentList.map((comment) => {
+                if (comment.id === parentCommentId) {
+                  return {
+                    ...comment,
+                    replies: (comment.replies || []).filter((r) => r.id !== optimisticReplyId),
+                  }
+                }
+                if (comment.replies && comment.replies.length > 0) {
+                  return {
+                    ...comment,
+                    replies: removeOptimisticReply(comment.replies),
+                  }
+                }
+                return comment
+              })
+            }
+
+            const updatedComments = { ...prev }
+            for (const reviewId in updatedComments) {
+              updatedComments[reviewId] = removeOptimisticReply(updatedComments[reviewId])
+            }
+            return updatedComments
+          })
+
           return { success: false, error: error.message }
         }
 
-        // Find the review ID for this comment
-        let reviewId: number | null = null
-        for (const [revId, commentsList] of Object.entries(comments)) {
-          const findParentComment = (commentList: ReviewComment[]): boolean => {
-            for (const comment of commentList) {
-              if (comment.id === parentCommentId) {
-                reviewId = safeNumber(revId, 0)
-                return true
-              }
-              if (comment.replies && comment.replies.length > 0) {
-                if (findParentComment(comment.replies)) {
-                  return true
-                }
-              }
-            }
-            return false
-          }
-
-          if (findParentComment(commentsList)) {
-            break
-          }
-        }
-
-        if (reviewId && data && data[0]) {
-          // Update the comments state by adding the reply to the parent comment
+        // Replace optimistic reply with real one
+        if (data && data[0]) {
           const newReply = processSafeComment(data[0], null) as ReviewComment
 
           setComments((prev) => {
@@ -564,7 +684,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
                 if (comment.id === parentCommentId) {
                   return {
                     ...comment,
-                    replies: [...(comment.replies || []), newReply],
+                    replies: (comment.replies || []).map((r) => (r.id === optimisticReplyId ? newReply : r)),
                   }
                 }
                 if (comment.replies && comment.replies.length > 0) {
@@ -577,10 +697,11 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
               })
             }
 
-            return {
-              ...prev,
-              [reviewId!]: updateReplies(prev[reviewId!] || []),
+            const updatedComments = { ...prev }
+            for (const reviewId in updatedComments) {
+              updatedComments[reviewId] = updateReplies(updatedComments[reviewId])
             }
+            return updatedComments
           })
         }
 
@@ -590,7 +711,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         return { success: false, error: "Failed to submit reply" }
       }
     },
-    [currentUser, userProfile, comments],
+    [currentUser, userProfile],
   )
 
   // React to a review (like/dislike)
