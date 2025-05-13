@@ -105,7 +105,9 @@ type ReviewsContextType = {
   reviews: ServiceReview[]
   comments: Record<number, ReviewComment[]>
   userReactions: Record<string, string>
-  isLoading: boolean
+  isInitialLoading: boolean
+  isSubmitting: boolean
+  commentsLoading: Record<number, boolean>
   currentUser: any | null
   userProfile: any | null
   fetchReviews: (serviceId: number) => Promise<void>
@@ -123,7 +125,9 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
   const [reviews, setReviews] = useState<ServiceReview[]>([])
   const [comments, setComments] = useState<Record<number, ReviewComment[]>>({})
   const [userReactions, setUserReactions] = useState<Record<string, string>>({})
-  const [isLoading, setIsLoading] = useState(true)
+  const [isInitialLoading, setIsInitialLoading] = useState(true)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [commentsLoading, setCommentsLoading] = useState<Record<number, boolean>>({})
   const [currentUser, setCurrentUser] = useState<any | null>(null)
   const [userProfile, setUserProfile] = useState<any | null>(null)
 
@@ -166,12 +170,16 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
   // Fetch reviews for a service
   const fetchReviews = useCallback(
     async (serviceId: number) => {
-      // Skip if we're already loading or have fetched this service's reviews
+      // Skip if we've already fetched this service's reviews
       if (fetchedReviewsRef.current[serviceId]) {
         return
       }
 
-      setIsLoading(true)
+      // Only set loading state for initial fetch
+      if (!fetchedReviewsRef.current[serviceId]) {
+        setIsInitialLoading(true)
+      }
+
       try {
         const { data, error } = await supabase
           .from("service_reviews")
@@ -226,7 +234,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         console.error("Error fetching reviews:", error)
         setReviews([])
       } finally {
-        setIsLoading(false)
+        setIsInitialLoading(false)
       }
     },
     [currentUser],
@@ -244,6 +252,11 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       // Skip if we've already fetched comments for this review
       if (fetchedCommentsRef.current[reviewId]) {
         return comments[reviewId] || []
+      }
+
+      // Only set loading state for initial fetch
+      if (!fetchedCommentsRef.current[reviewId]) {
+        setCommentsLoading((prev) => ({ ...prev, [reviewId]: true }))
       }
 
       try {
@@ -344,6 +357,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         console.error("Error getting review comments:", error)
         return []
+      } finally {
+        setCommentsLoading((prev) => ({ ...prev, [reviewId]: false }))
       }
     },
     [currentUser, comments],
@@ -369,6 +384,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         return { success: false, error: "Missing required fields" }
       }
 
+      setIsSubmitting(true)
+
       try {
         // Get display name from user_profiles or metadata
         const authorName = getDisplayNameFromData(currentUser, userProfile)
@@ -376,6 +393,30 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         // Get avatar URL from user_profiles or metadata
         const authorAvatar =
           safeGet(userProfile, "avatar_url", null) || safeGet(currentUser, "user_metadata.avatar_url", null)
+
+        // Create optimistic review
+        const optimisticReviewId = `temp-${Date.now()}`
+        const optimisticReview: ServiceReview = {
+          id: optimisticReviewId,
+          service_id: serviceId,
+          user_id: currentUser.id,
+          author_name: authorName,
+          author_avatar: authorAvatar || "/placeholder.svg",
+          rating,
+          title,
+          content,
+          interface_rating: interfaceRating > 0 ? interfaceRating : null,
+          reliability_rating: reliabilityRating > 0 ? reliabilityRating : null,
+          content_rating: contentRating > 0 ? contentRating : null,
+          value_rating: valueRating > 0 ? valueRating : null,
+          likes: 0,
+          dislikes: 0,
+          created_at: new Date().toISOString(),
+          isOptimistic: true,
+        }
+
+        // Update UI optimistically
+        setReviews((prev) => [optimisticReview, ...prev])
 
         const { data, error } = await supabase
           .from("service_reviews")
@@ -398,19 +439,25 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
         if (error) {
           console.error("Error submitting review:", error)
+
+          // Remove optimistic review on error
+          setReviews((prev) => prev.filter((r) => r.id !== optimisticReviewId))
+
           return { success: false, error: error.message }
         }
 
-        // Update reviews state with the new review
+        // Replace optimistic review with real one
         if (data && data[0]) {
           const safeReview = processSafeReview(data[0])
-          setReviews((prev) => [safeReview as ServiceReview, ...prev])
+          setReviews((prev) => prev.map((r) => (r.id === optimisticReviewId ? (safeReview as ServiceReview) : r)))
         }
 
         return { success: true }
       } catch (error) {
         console.error("Error submitting review:", error)
         return { success: false, error: "Failed to submit review" }
+      } finally {
+        setIsSubmitting(false)
       }
     },
     [currentUser, userProfile],
@@ -430,6 +477,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       if (reviewId === 0 || !content.trim()) {
         return { success: false, error: "Missing required fields" }
       }
+
+      setIsSubmitting(true)
 
       try {
         // Get display name from user_profiles or metadata
@@ -515,6 +564,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         console.error("Error submitting comment:", error)
         return { success: false, error: "Failed to submit comment" }
+      } finally {
+        setIsSubmitting(false)
       }
     },
     [currentUser, userProfile],
@@ -540,6 +591,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       if (nestingLevel > 3) {
         return { success: false, error: "Maximum reply depth reached" }
       }
+
+      setIsSubmitting(true)
 
       try {
         // Get display name from user_profiles or metadata
@@ -709,6 +762,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         console.error("Error submitting reply:", error)
         return { success: false, error: "Failed to submit reply" }
+      } finally {
+        setIsSubmitting(false)
       }
     },
     [currentUser, userProfile],
@@ -944,7 +999,9 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
     reviews,
     comments,
     userReactions,
-    isLoading,
+    isInitialLoading,
+    isSubmitting,
+    commentsLoading,
     currentUser,
     userProfile,
     fetchReviews,

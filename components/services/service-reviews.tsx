@@ -10,13 +10,13 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { ReviewCommentsSection } from "./review-comments-section"
+import { ReviewSkeleton } from "./review-skeleton"
 import { AuthButton } from "@/components/auth/auth-button"
 import { cn } from "@/lib/utils"
 import { ReviewsProvider, useReviews } from "@/contexts/reviews-context"
 import { safeInitials, safeFormatDate, safeString, safeNumber, safeGet } from "@/lib/data-safety-utils"
-import { ReviewSkeleton, ReviewFormSkeleton, NoReviewsSkeleton } from "./review-skeletons"
 
 interface ServiceReviewsProps {
   serviceId: number
@@ -32,8 +32,18 @@ export function ServiceReviews({ serviceId }: ServiceReviewsProps) {
 }
 
 function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
-  const { reviews, isLoading, currentUser, userProfile, fetchReviews, submitReview, reactToReview, userReactions } =
-    useReviews()
+  const {
+    reviews,
+    isInitialLoading,
+    isSubmitting,
+    currentUser,
+    userProfile,
+    fetchReviews,
+    submitReview,
+    reactToReview,
+    userReactions,
+  } = useReviews()
+
   const [reviewFilter, setReviewFilter] = useState("all")
   const [userDisplayName, setUserDisplayName] = useState<string>("Anonymous")
 
@@ -46,12 +56,11 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
   const [reliabilityRating, setReliabilityRating] = useState(0)
   const [contentRating, setContentRating] = useState(0)
   const [valueRating, setValueRating] = useState(0)
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [localSubmitting, setLocalSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showReviewForm, setShowReviewForm] = useState(false)
   const [expandedReviews, setExpandedReviews] = useState<Record<number, boolean>>({})
   const [expandedComments, setExpandedComments] = useState<Record<number, boolean>>({})
-  const [loadingReviewForm, setLoadingReviewForm] = useState(false)
 
   // Track if we've already fetched reviews
   const [hasFetchedReviews, setHasFetchedReviews] = useState(false)
@@ -64,10 +73,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
     if (!hasFetchedReviews && !fetchedReviewsRef.current[serviceId]) {
       fetchedReviewsRef.current[serviceId] = true
       fetchReviews(serviceId).then(() => {
-        // Add a small delay to prevent flickering for fast connections
-        setTimeout(() => {
-          setHasFetchedReviews(true)
-        }, 300)
+        setHasFetchedReviews(true)
       })
     }
   }, [serviceId, fetchReviews, hasFetchedReviews])
@@ -91,20 +97,6 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
       }
     }
   }, [currentUser, userProfile])
-
-  // Handle showing review form with loading state
-  const handleShowReviewForm = useCallback(() => {
-    if (!showReviewForm) {
-      setLoadingReviewForm(true)
-      setShowReviewForm(true)
-      // Simulate loading time for the form
-      setTimeout(() => {
-        setLoadingReviewForm(false)
-      }, 500)
-    } else {
-      setShowReviewForm(false)
-    }
-  }, [showReviewForm])
 
   // Filter reviews based on selected filter
   const filteredReviews = useMemo(() => {
@@ -141,7 +133,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
         return
       }
 
-      setIsSubmitting(true)
+      setLocalSubmitting(true)
       setError(null)
 
       const formData = new FormData()
@@ -157,7 +149,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
 
       const result = await submitReview(formData)
 
-      setIsSubmitting(false)
+      setLocalSubmitting(false)
 
       if (!result.success) {
         setError(result.error)
@@ -223,6 +215,17 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
     return userReactions[`review_${reviewId}`] || null
   }
 
+  // Render skeleton loaders for initial loading
+  const renderSkeletons = () => {
+    return (
+      <div className="space-y-5">
+        <ReviewSkeleton />
+        <ReviewSkeleton />
+        <ReviewSkeleton />
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
@@ -238,8 +241,9 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
         {currentUser && (
           <Button
             variant="outline"
-            onClick={handleShowReviewForm}
+            onClick={() => setShowReviewForm(!showReviewForm)}
             className="bg-primary/5 hover:bg-primary/10 border-primary/20"
+            disabled={localSubmitting || isSubmitting}
           >
             {showReviewForm ? "Cancel Review" : "Write a Review"}
           </Button>
@@ -260,36 +264,88 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
         </Card>
       )}
 
-      {currentUser &&
-        showReviewForm &&
-        (loadingReviewForm ? (
-          <ReviewFormSkeleton />
-        ) : (
-          <Card className="border-primary/20 shadow-md">
-            <CardHeader className="pb-3">
-              <CardTitle>Write a Review</CardTitle>
-              <CardDescription>Share your experience with this streaming service</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={handleReviewSubmit} className="space-y-4">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
-                  <Avatar className="h-6 w-6 border shadow-sm">
-                    <AvatarImage
-                      src={safeGet(currentUser, "user_metadata.avatar_url", "/placeholder.svg") || "/placeholder.svg"}
-                      alt={userDisplayName}
-                    />
-                    <AvatarFallback className="bg-primary/10 text-primary text-xs">
-                      {safeInitials(userDisplayName)}
-                    </AvatarFallback>
-                  </Avatar>
-                  <span>
-                    Posting as <span className="font-medium text-foreground">{userDisplayName}</span>
-                  </span>
-                </div>
+      {currentUser && showReviewForm && (
+        <Card className="border-primary/20 shadow-md">
+          <CardHeader className="pb-3">
+            <CardTitle>Write a Review</CardTitle>
+            <CardDescription>Share your experience with this streaming service</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleReviewSubmit} className="space-y-4">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
+                <Avatar className="h-6 w-6 border shadow-sm">
+                  <AvatarImage
+                    src={safeGet(currentUser, "user_metadata.avatar_url", "/placeholder.svg") || "/placeholder.svg"}
+                    alt={userDisplayName}
+                  />
+                  <AvatarFallback className="bg-primary/10 text-primary text-xs">
+                    {safeInitials(userDisplayName)}
+                  </AvatarFallback>
+                </Avatar>
+                <span>
+                  Posting as <span className="font-medium text-foreground">{userDisplayName}</span>
+                </span>
+              </div>
 
+              <div>
+                <label htmlFor="rating" className="block text-sm font-medium mb-1">
+                  Overall Rating
+                </label>
+                <div className="flex gap-1">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      type="button"
+                      className="text-muted hover:text-primary transition-colors"
+                      onMouseEnter={() => setHoverRating(star)}
+                      onMouseLeave={() => setHoverRating(0)}
+                      onClick={() => setRating(star)}
+                      disabled={localSubmitting || isSubmitting}
+                    >
+                      <Star
+                        className="h-7 w-7"
+                        fill={(hoverRating || rating) >= star ? "currentColor" : "none"}
+                        strokeWidth={1.5}
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="title" className="block text-sm font-medium mb-1">
+                  Title
+                </label>
+                <Input
+                  id="title"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="Summarize your experience"
+                  className="bg-muted/50"
+                  required
+                  disabled={localSubmitting || isSubmitting}
+                />
+              </div>
+
+              <div>
+                <label htmlFor="review" className="block text-sm font-medium mb-1">
+                  Review
+                </label>
+                <Textarea
+                  id="review"
+                  value={content}
+                  onChange={(e) => setContent(e.target.value)}
+                  placeholder="Share your experience with this streaming service"
+                  className="min-h-[100px] bg-muted/50"
+                  required
+                  disabled={localSubmitting || isSubmitting}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label htmlFor="rating" className="block text-sm font-medium mb-1">
-                    Overall Rating
+                  <label htmlFor="interface-rating" className="block text-sm font-medium mb-1">
+                    Interface Rating
                   </label>
                   <div className="flex gap-1">
                     {[1, 2, 3, 4, 5].map((star) => (
@@ -297,13 +353,12 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
                         key={star}
                         type="button"
                         className="text-muted hover:text-primary transition-colors"
-                        onMouseEnter={() => setHoverRating(star)}
-                        onMouseLeave={() => setHoverRating(0)}
-                        onClick={() => setRating(star)}
+                        onClick={() => setInterfaceRating(star)}
+                        disabled={localSubmitting || isSubmitting}
                       >
                         <Star
-                          className="h-7 w-7"
-                          fill={(hoverRating || rating) >= star ? "currentColor" : "none"}
+                          className="h-5 w-5"
+                          fill={interfaceRating >= star ? "currentColor" : "none"}
                           strokeWidth={1.5}
                         />
                       </button>
@@ -312,144 +367,119 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
                 </div>
 
                 <div>
-                  <label htmlFor="title" className="block text-sm font-medium mb-1">
-                    Title
+                  <label htmlFor="reliability-rating" className="block text-sm font-medium mb-1">
+                    Reliability Rating
                   </label>
-                  <Input
-                    id="title"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    placeholder="Summarize your experience"
-                    className="bg-muted/50"
-                    required
-                  />
+                  <div className="flex gap-1">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <button
+                        key={star}
+                        type="button"
+                        className="text-muted hover:text-primary transition-colors"
+                        onClick={() => setReliabilityRating(star)}
+                        disabled={localSubmitting || isSubmitting}
+                      >
+                        <Star
+                          className="h-5 w-5"
+                          fill={reliabilityRating >= star ? "currentColor" : "none"}
+                          strokeWidth={1.5}
+                        />
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 <div>
-                  <label htmlFor="review" className="block text-sm font-medium mb-1">
-                    Review
+                  <label htmlFor="content-rating" className="block text-sm font-medium mb-1">
+                    Content Rating
                   </label>
-                  <Textarea
-                    id="review"
-                    value={content}
-                    onChange={(e) => setContent(e.target.value)}
-                    placeholder="Share your experience with this streaming service"
-                    className="min-h-[100px] bg-muted/50"
-                    required
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label htmlFor="interface-rating" className="block text-sm font-medium mb-1">
-                      Interface Rating
-                    </label>
-                    <div className="flex gap-1">
-                      {[1, 2, 3, 4, 5].map((star) => (
-                        <button
-                          key={star}
-                          type="button"
-                          className="text-muted hover:text-primary transition-colors"
-                          onClick={() => setInterfaceRating(star)}
-                        >
-                          <Star
-                            className="h-5 w-5"
-                            fill={interfaceRating >= star ? "currentColor" : "none"}
-                            strokeWidth={1.5}
-                          />
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label htmlFor="reliability-rating" className="block text-sm font-medium mb-1">
-                      Reliability Rating
-                    </label>
-                    <div className="flex gap-1">
-                      {[1, 2, 3, 4, 5].map((star) => (
-                        <button
-                          key={star}
-                          type="button"
-                          className="text-muted hover:text-primary transition-colors"
-                          onClick={() => setReliabilityRating(star)}
-                        >
-                          <Star
-                            className="h-5 w-5"
-                            fill={reliabilityRating >= star ? "currentColor" : "none"}
-                            strokeWidth={1.5}
-                          />
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label htmlFor="content-rating" className="block text-sm font-medium mb-1">
-                      Content Rating
-                    </label>
-                    <div className="flex gap-1">
-                      {[1, 2, 3, 4, 5].map((star) => (
-                        <button
-                          key={star}
-                          type="button"
-                          className="text-muted hover:text-primary transition-colors"
-                          onClick={() => setContentRating(star)}
-                        >
-                          <Star
-                            className="h-5 w-5"
-                            fill={contentRating >= star ? "currentColor" : "none"}
-                            strokeWidth={1.5}
-                          />
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label htmlFor="value-rating" className="block text-sm font-medium mb-1">
-                      Value Rating
-                    </label>
-                    <div className="flex gap-1">
-                      {[1, 2, 3, 4, 5].map((star) => (
-                        <button
-                          key={star}
-                          type="button"
-                          className="text-muted hover:text-primary transition-colors"
-                          onClick={() => setValueRating(star)}
-                        >
-                          <Star
-                            className="h-5 w-5"
-                            fill={valueRating >= star ? "currentColor" : "none"}
-                            strokeWidth={1.5}
-                          />
-                        </button>
-                      ))}
-                    </div>
+                  <div className="flex gap-1">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <button
+                        key={star}
+                        type="button"
+                        className="text-muted hover:text-primary transition-colors"
+                        onClick={() => setContentRating(star)}
+                        disabled={localSubmitting || isSubmitting}
+                      >
+                        <Star
+                          className="h-5 w-5"
+                          fill={contentRating >= star ? "currentColor" : "none"}
+                          strokeWidth={1.5}
+                        />
+                      </button>
+                    ))}
                   </div>
                 </div>
 
-                {error && <p className="text-sm text-destructive">{error}</p>}
-
-                <div className="flex justify-end">
-                  <Button type="submit" disabled={isSubmitting} className="bg-primary hover:bg-primary/90">
-                    {isSubmitting ? "Submitting..." : "Submit Review"}
-                  </Button>
+                <div>
+                  <label htmlFor="value-rating" className="block text-sm font-medium mb-1">
+                    Value Rating
+                  </label>
+                  <div className="flex gap-1">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <button
+                        key={star}
+                        type="button"
+                        className="text-muted hover:text-primary transition-colors"
+                        onClick={() => setValueRating(star)}
+                        disabled={localSubmitting || isSubmitting}
+                      >
+                        <Star
+                          className="h-5 w-5"
+                          fill={valueRating >= star ? "currentColor" : "none"}
+                          strokeWidth={1.5}
+                        />
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </form>
-            </CardContent>
-          </Card>
-        ))}
+              </div>
+
+              {error && <p className="text-sm text-destructive">{error}</p>}
+
+              <div className="flex justify-end">
+                <Button
+                  type="submit"
+                  disabled={localSubmitting || isSubmitting}
+                  className={cn("bg-primary hover:bg-primary/90", (localSubmitting || isSubmitting) && "opacity-70")}
+                >
+                  {localSubmitting || isSubmitting ? "Submitting..." : "Submit Review"}
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="space-y-5">
-        {isLoading ? (
-          <div className="space-y-5">
-            <ReviewSkeleton />
-            <ReviewSkeleton />
-            <ReviewSkeleton />
-          </div>
+        {isInitialLoading ? (
+          renderSkeletons()
         ) : filteredReviews.length === 0 ? (
-          <NoReviewsSkeleton />
+          <Card className="bg-muted/30 border-dashed">
+            <CardHeader>
+              <CardTitle className="text-center">No Reviews Yet</CardTitle>
+              <CardDescription className="text-center">
+                Be the first to share your experience with this streaming service
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex justify-center items-center py-8">
+              <MessageSquare className="h-16 w-16 text-muted" />
+            </CardContent>
+            <CardFooter className="flex justify-center">
+              {currentUser ? (
+                <Button
+                  variant="outline"
+                  onClick={() => setShowReviewForm(true)}
+                  className="bg-primary/5 hover:bg-primary/10 border-primary/20"
+                >
+                  Write a Review
+                </Button>
+              ) : (
+                <AuthButton />
+              )}
+            </CardFooter>
+          </Card>
         ) : (
           filteredReviews.map((review) => {
             // Safely access review properties with fallbacks
@@ -465,11 +495,15 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
             const reliabilityRating = safeNumber(review?.reliability_rating, 0)
             const contentRating = safeNumber(review?.content_rating, 0)
             const valueRating = safeNumber(review?.value_rating, 0)
+            const isOptimistic = !!review?.isOptimistic
 
             return (
               <div
                 key={reviewId}
-                className="group rounded-xl border bg-card shadow-sm overflow-hidden hover:shadow-md transition-shadow"
+                className={cn(
+                  "group rounded-xl border bg-card shadow-sm overflow-hidden hover:shadow-md transition-shadow",
+                  isOptimistic && "opacity-80",
+                )}
               >
                 <div className="p-4 sm:p-5">
                   <div className="flex items-start gap-3">
@@ -624,6 +658,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
                               : "text-muted-foreground hover:text-primary",
                           )}
                           onClick={() => handleReviewReaction(reviewId, "like")}
+                          disabled={isOptimistic}
                         >
                           <ThumbsUp
                             className={cn("h-4 w-4", getUserReactionToReview(reviewId) === "like" && "fill-primary")}
@@ -633,6 +668,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
                         <button
                           className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-primary transition-colors"
                           onClick={() => toggleComments(reviewId)}
+                          disabled={isOptimistic}
                         >
                           <MessageSquare className="h-4 w-4" />
                           <span>Comment</span>

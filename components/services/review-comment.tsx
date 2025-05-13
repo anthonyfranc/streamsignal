@@ -2,184 +2,190 @@
 
 import type React from "react"
 
-import { useState, memo } from "react"
+import { useState, useCallback, memo } from "react"
 import { formatDistanceToNow } from "date-fns"
-import { ThumbsUp, ThumbsDown, Reply, MoreHorizontal } from "lucide-react"
+import { ThumbsUp, MessageSquare } from "lucide-react"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { cn } from "@/lib/utils"
-import type { ReviewComment as ReviewCommentType } from "@/types/reviews"
 import { useReviews } from "@/contexts/reviews-context"
+import { cn } from "@/lib/utils"
 import { safeInitials, safeFormatDate, safeString, safeNumber } from "@/lib/data-safety-utils"
-import { CommentSkeleton } from "./review-skeletons"
+import type { ReviewComment as ReviewCommentType } from "@/types/reviews"
 
 interface ReviewCommentProps {
   comment: ReviewCommentType
   serviceId: number
-  isLoading?: boolean
+  isOptimistic?: boolean
 }
 
 export const ReviewComment = memo(function ReviewComment({
   comment,
   serviceId,
-  isLoading = false,
+  isOptimistic = false,
 }: ReviewCommentProps) {
-  const { currentUser, submitReply, reactToComment } = useReviews()
-  const [isReplying, setIsReplying] = useState(false)
+  const { currentUser, userProfile, submitReply, reactToComment, userReactions, isSubmitting } = useReviews()
+  const [showReplyForm, setShowReplyForm] = useState(false)
   const [replyContent, setReplyContent] = useState("")
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [loadingReplies, setLoadingReplies] = useState(false)
+  const [localSubmitting, setLocalSubmitting] = useState(false)
 
-  // Format date - with error handling
+  // Format date with error handling
   const formatDate = (dateString: string | null | undefined) => {
     return safeFormatDate(dateString, (date) => formatDistanceToNow(date, { addSuffix: true }))
   }
 
   // Handle reply submission
-  const handleReplySubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!replyContent.trim() || !currentUser) return
+  const handleReplySubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault()
+      if (!replyContent.trim() || !currentUser) return
 
-    setIsSubmitting(true)
-    try {
-      const formData = new FormData()
-      formData.append("parentCommentId", String(safeNumber(comment?.id, 0)))
-      formData.append("content", replyContent)
-      formData.append("serviceId", String(safeNumber(serviceId, 0)))
-      formData.append("nestingLevel", String(safeNumber(comment?.nesting_level, 1)))
-      formData.append("reviewId", String(safeNumber(comment?.review_id, 0)))
+      setLocalSubmitting(true)
+      try {
+        const formData = new FormData()
+        formData.append("parentCommentId", String(comment.id))
+        formData.append("content", replyContent)
+        formData.append("nestingLevel", String(comment.nesting_level || 1))
+        formData.append("reviewId", String(comment.review_id))
+        formData.append("serviceId", String(serviceId))
 
-      // Clear the input immediately for better UX
-      setReplyContent("")
+        // Reset input field immediately for better UX
+        setReplyContent("")
 
-      const result = await submitReply(formData)
+        const result = await submitReply(formData)
 
-      if (result.success) {
-        setIsReplying(false)
+        if (result.success) {
+          setShowReplyForm(false)
+        }
+      } catch (error) {
+        console.error("Error submitting reply:", error)
+      } finally {
+        setLocalSubmitting(false)
       }
-    } catch (error) {
-      console.error("Error submitting reply:", error)
-    } finally {
-      setIsSubmitting(false)
-    }
+    },
+    [comment, replyContent, currentUser, serviceId, submitReply],
+  )
+
+  // Handle comment reaction
+  const handleCommentReaction = useCallback(
+    async (commentId: number, reactionType: string) => {
+      if (!currentUser) return
+      await reactToComment(commentId, reactionType)
+    },
+    [currentUser, reactToComment],
+  )
+
+  // Get user reaction to this comment
+  const getUserReactionToComment = (commentId: number) => {
+    return userReactions[`comment_${commentId}`] || null
   }
 
-  // Handle reaction
-  const handleReaction = async (reactionType: "like" | "dislike") => {
-    if (!currentUser) return
-    await reactToComment(safeNumber(comment?.id, 0), reactionType)
-  }
+  // Get user display name and avatar
+  const userDisplayName =
+    userProfile?.display_name ||
+    currentUser?.user_metadata?.full_name ||
+    currentUser?.user_metadata?.name ||
+    "Anonymous"
+  const userAvatar = userProfile?.avatar_url || currentUser?.user_metadata?.avatar_url || "/placeholder.svg"
 
-  // Handle loading more replies
-  const handleLoadReplies = () => {
-    setLoadingReplies(true)
-    // Simulate loading replies (in a real app, this would fetch from the server)
-    setTimeout(() => {
-      setLoadingReplies(false)
-    }, 1000)
-  }
-
-  if (isLoading) {
-    return <CommentSkeleton nested={safeNumber(comment?.nesting_level, 1) > 1} />
-  }
-
-  // Safely access comment properties with fallbacks
+  // Safely access comment properties
+  const commentId = safeNumber(comment?.id, 0)
   const authorName = safeString(comment?.author_name, "Anonymous")
   const authorAvatar = safeString(comment?.author_avatar, "/placeholder.svg")
   const content = safeString(comment?.content, "")
   const likes = safeNumber(comment?.likes, 0)
-  const dislikes = safeNumber(comment?.dislikes, 0)
-  const nestingLevel = safeNumber(comment?.nesting_level, 1)
   const createdAt = safeString(comment?.created_at, new Date().toISOString())
-  const userReaction = comment?.user_reaction || null
+  const nestingLevel = safeNumber(comment?.nesting_level, 1)
   const replies = Array.isArray(comment?.replies) ? comment.replies : []
-  const isOptimistic = comment?.isOptimistic || false
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-start gap-2">
-        <Avatar className="h-7 w-7 border shadow-sm">
+    <div className={cn("space-y-3", isOptimistic && "opacity-80")}>
+      <div className="flex gap-3">
+        <Avatar className="h-8 w-8 border shadow-sm flex-shrink-0">
           <AvatarImage src={authorAvatar || "/placeholder.svg"} alt={authorName} />
           <AvatarFallback className="bg-primary/10 text-primary text-xs">{safeInitials(authorName)}</AvatarFallback>
         </Avatar>
 
-        <div className="flex-1 space-y-1">
-          <div className={`bg-muted/50 rounded-2xl px-3 py-2 ${isOptimistic ? "opacity-70" : ""}`}>
-            <div className="flex items-center justify-between">
-              <h5 className="font-medium text-sm">{authorName}</h5>
-              <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100">
-                <MoreHorizontal className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-            <p className="text-sm">{content}</p>
+        <div className="flex-1">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-sm">{authorName}</span>
+            <span className="text-xs text-muted-foreground">{formatDate(createdAt)}</span>
           </div>
 
-          <div className="flex items-center gap-3 px-3">
+          <p className="text-sm mt-1">{content}</p>
+
+          <div className="flex items-center gap-3 mt-2">
             <button
               className={cn(
-                "flex items-center gap-1 text-xs hover:text-primary transition-colors",
-                userReaction === "like" ? "text-primary font-medium" : "text-muted-foreground",
+                "flex items-center gap-1 text-xs transition-colors",
+                getUserReactionToComment(commentId) === "like"
+                  ? "text-primary font-medium"
+                  : "text-muted-foreground hover:text-primary",
               )}
-              onClick={() => handleReaction("like")}
+              onClick={() => handleCommentReaction(commentId, "like")}
               disabled={isOptimistic}
             >
-              <ThumbsUp className="h-3.5 w-3.5" />
-              {likes > 0 && <span>{likes}</span>}
+              <ThumbsUp
+                className={cn("h-3.5 w-3.5", getUserReactionToComment(commentId) === "like" && "fill-primary")}
+              />
+              <span>Helpful{likes > 0 && ` (${likes})`}</span>
             </button>
 
-            <button
-              className={cn(
-                "flex items-center gap-1 text-xs hover:text-primary transition-colors",
-                userReaction === "dislike" ? "text-primary font-medium" : "text-muted-foreground",
-              )}
-              onClick={() => handleReaction("dislike")}
-              disabled={isOptimistic}
-            >
-              <ThumbsDown className="h-3.5 w-3.5" />
-              {dislikes > 0 && <span>{dislikes}</span>}
-            </button>
-
-            {nestingLevel < 3 && !isOptimistic && (
+            {nestingLevel < 3 && currentUser && (
               <button
-                className="text-xs text-muted-foreground hover:text-primary transition-colors flex items-center gap-1"
-                onClick={() => setIsReplying(!isReplying)}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-primary transition-colors"
+                onClick={() => setShowReplyForm(!showReplyForm)}
+                disabled={isOptimistic}
               >
-                <Reply className="h-3.5 w-3.5" />
-                Reply
+                <MessageSquare className="h-3.5 w-3.5" />
+                <span>Reply</span>
               </button>
             )}
-
-            <span className="text-xs text-muted-foreground">{isOptimistic ? "Posting..." : formatDate(createdAt)}</span>
           </div>
 
-          {isReplying && (
-            <form onSubmit={handleReplySubmit} className="pt-2 pl-2 relative">
+          {showReplyForm && currentUser && (
+            <form onSubmit={handleReplySubmit} className="mt-3 space-y-2">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Avatar className="h-5 w-5 border shadow-sm">
+                  <AvatarImage src={userAvatar || "/placeholder.svg"} alt={userDisplayName} />
+                  <AvatarFallback className="bg-primary/10 text-primary text-[10px]">
+                    {safeInitials(userDisplayName)}
+                  </AvatarFallback>
+                </Avatar>
+                <span>
+                  Replying as <span className="font-medium text-foreground">{userDisplayName}</span>
+                </span>
+              </div>
+
               <Textarea
                 value={replyContent}
                 onChange={(e) => setReplyContent(e.target.value)}
                 placeholder={`Reply to ${authorName}...`}
-                className="min-h-[60px] pr-10 resize-none text-sm rounded-xl py-2 bg-muted/30"
-                disabled={isSubmitting}
+                className="min-h-[60px] resize-none text-sm rounded-xl py-2 bg-muted/30"
+                disabled={localSubmitting || isSubmitting}
               />
-              <div className="flex justify-end gap-2 mt-2">
+
+              <div className="flex justify-end gap-2">
                 <Button
                   type="button"
-                  variant="ghost"
                   size="sm"
-                  className="h-8 text-xs"
-                  onClick={() => setIsReplying(false)}
-                  disabled={isSubmitting}
+                  variant="outline"
+                  className="h-7 text-xs"
+                  onClick={() => setShowReplyForm(false)}
+                  disabled={localSubmitting || isSubmitting}
                 >
                   Cancel
                 </Button>
                 <Button
                   type="submit"
                   size="sm"
-                  className="h-8 text-xs bg-primary hover:bg-primary/90"
-                  disabled={isSubmitting || !replyContent.trim()}
+                  className={cn(
+                    "h-7 text-xs bg-primary hover:bg-primary/90",
+                    (localSubmitting || isSubmitting) && "opacity-70",
+                  )}
+                  disabled={localSubmitting || isSubmitting || !replyContent.trim()}
                 >
-                  {isSubmitting ? "Submitting..." : "Reply"}
+                  {localSubmitting || isSubmitting ? "Posting..." : "Post Reply"}
                 </Button>
               </div>
             </form>
@@ -187,18 +193,17 @@ export const ReviewComment = memo(function ReviewComment({
         </div>
       </div>
 
+      {/* Render replies */}
       {replies.length > 0 && (
-        <div className="pl-6 space-y-3 border-l-2 border-muted ml-3">
+        <div className="pl-8 space-y-3 border-l border-muted ml-4">
           {replies.map((reply) => (
-            <ReviewComment key={`reply-${safeNumber(reply?.id, 0)}`} comment={reply} serviceId={serviceId} />
+            <ReviewComment
+              key={`reply-${reply.id}`}
+              comment={reply}
+              serviceId={serviceId}
+              isOptimistic={reply.isOptimistic}
+            />
           ))}
-
-          {loadingReplies && (
-            <>
-              <CommentSkeleton nested={true} />
-              <CommentSkeleton nested={true} />
-            </>
-          )}
         </div>
       )}
     </div>
