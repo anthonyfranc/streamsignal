@@ -1,105 +1,23 @@
 "use client"
 
 import type React from "react"
-import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react"
-import { supabase } from "@/lib/supabase"
-import type { ServiceReview, ReviewComment, SafeReviewComment, SafeServiceReview } from "@/types/reviews"
+import { createContext, useContext, useEffect, useCallback } from "react"
+import { useAuthUser } from "@/hooks/use-auth-user"
+import { useReviewsData } from "@/hooks/use-reviews-data"
+import { reviewsService } from "@/services/reviews-service"
+import {
+  processSafeReview,
+  processSafeComment,
+  getDisplayNameFromData,
+  buildCommentTree,
+  updateCommentTreeWithReply,
+  replaceCommentInTree,
+  removeCommentFromTree,
+  updateCommentReactionInTree,
+} from "@/utils/review-utils"
 import { safeString, safeNumber, safeGet } from "@/lib/data-safety-utils"
-
-// Safely get user from session
-async function getCurrentUser() {
-  try {
-    const { data, error } = await supabase.auth.getSession()
-    if (error || !data.session) {
-      return null
-    }
-    return data.session.user
-  } catch (error) {
-    console.error("Error getting current user:", error)
-    return null
-  }
-}
-
-// Safely get display name from user data
-function getDisplayNameFromData(user: any, userProfile: any): string {
-  if (!user) return "Anonymous"
-
-  try {
-    // First try to get the display name from user_profiles
-    if (userProfile && userProfile.display_name) {
-      return userProfile.display_name
-    }
-
-    // If no profile or no display name, try to get the name from user metadata
-    const metadata = user.user_metadata || {}
-    const fullName = metadata.full_name || metadata.name || metadata.preferred_username
-
-    if (fullName) return fullName
-
-    // If no name is found, try to use the email
-    const email = user.email
-    if (email && typeof email === "string") {
-      // Return the part before the @ symbol
-      return email.split("@")[0]
-    }
-
-    // If all else fails, return the user ID truncated
-    return user.id ? `User ${user.id.substring(0, 6)}` : "Anonymous"
-  } catch (error) {
-    console.error("Error getting display name:", error)
-    return "Anonymous"
-  }
-}
-
-// Safely process review data to ensure all required fields exist
-function processSafeReview(review: any): SafeServiceReview {
-  if (!review || typeof review !== "object") {
-    return { id: 0, service_id: 0 }
-  }
-
-  return {
-    id: safeNumber(review.id, 0),
-    service_id: safeNumber(review.service_id, 0),
-    user_id: safeString(review.user_id, ""),
-    author_name: safeString(review.author_name, "Anonymous"),
-    author_avatar: safeString(review.author_avatar, "/placeholder.svg"),
-    rating: safeNumber(review.rating, 0),
-    title: safeString(review.title, "Review"),
-    content: safeString(review.content, ""),
-    interface_rating: review.interface_rating !== null ? safeNumber(review.interface_rating, 0) : null,
-    reliability_rating: review.reliability_rating !== null ? safeNumber(review.reliability_rating, 0) : null,
-    content_rating: review.content_rating !== null ? safeNumber(review.content_rating, 0) : null,
-    value_rating: review.value_rating !== null ? safeNumber(review.value_rating, 0) : null,
-    likes: safeNumber(review.likes, 0),
-    dislikes: safeNumber(review.dislikes, 0),
-    created_at: safeString(review.created_at, new Date().toISOString()),
-  }
-}
-
-// Safely process comment data to ensure all required fields exist
-function processSafeComment(comment: any, userReaction: string | null = null): SafeReviewComment {
-  if (!comment || typeof comment !== "object") {
-    return { id: 0 }
-  }
-
-  return {
-    id: comment.id !== undefined ? comment.id : 0,
-    review_id: comment.review_id !== null ? safeNumber(comment.review_id, 0) : null,
-    parent_comment_id: comment.parent_comment_id !== null ? safeNumber(comment.parent_comment_id, 0) : null,
-    user_id: safeString(comment.user_id, ""),
-    author_name: safeString(comment.author_name, "Anonymous"),
-    author_avatar: safeString(comment.author_avatar, "/placeholder.svg"),
-    content: safeString(comment.content, ""),
-    likes: safeNumber(comment.likes, 0),
-    dislikes: safeNumber(comment.dislikes, 0),
-    created_at: safeString(comment.created_at, new Date().toISOString()),
-    updated_at: comment.updated_at ? safeString(comment.updated_at) : null,
-    nesting_level: safeNumber(comment.nesting_level, 1),
-    replies: Array.isArray(comment.replies) ? comment.replies : [],
-    user_reaction: userReaction,
-    isOptimistic: !!comment.isOptimistic,
-  }
-}
+import type { ServiceReview, ReviewComment } from "@/types/reviews"
+import { supabase } from "@/lib/supabase-client"
 
 type ReviewsContextType = {
   reviews: ServiceReview[]
@@ -122,50 +40,30 @@ type ReviewsContextType = {
 const ReviewsContext = createContext<ReviewsContextType | undefined>(undefined)
 
 export function ReviewsProvider({ children }: { children: React.ReactNode }) {
-  const [reviews, setReviews] = useState<ServiceReview[]>([])
-  const [comments, setComments] = useState<Record<number, ReviewComment[]>>({})
-  const [userReactions, setUserReactions] = useState<Record<string, string>>({})
-  const [isInitialLoading, setIsInitialLoading] = useState(true)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [commentsLoading, setCommentsLoading] = useState<Record<number, boolean>>({})
-  const [currentUser, setCurrentUser] = useState<any | null>(null)
-  const [userProfile, setUserProfile] = useState<any | null>(null)
+  // Use custom hooks for state management
+  const { currentUser, userProfile } = useAuthUser()
+  const {
+    reviews,
+    setReviews,
+    comments,
+    setComments,
+    userReactions,
+    setUserReactions,
+    isInitialLoading,
+    setIsInitialLoading,
+    isSubmitting,
+    setIsSubmitting,
+    commentsLoading,
+    setCommentsLoading,
+    fetchedReviewsRef,
+    fetchedCommentsRef,
+    resetFetchedState,
+  } = useReviewsData()
 
-  // Use refs to track if we've already fetched data
-  const fetchedReviewsRef = useRef<Record<number, boolean>>({})
-  const fetchedCommentsRef = useRef<Record<number, boolean>>({})
-  const isFetchingUserProfile = useRef(false)
-
-  // Check current user and fetch profile
+  // Reset fetched state when current user changes
   useEffect(() => {
-    const checkUser = async () => {
-      try {
-        const user = await getCurrentUser()
-        setCurrentUser(user)
-
-        if (user && !isFetchingUserProfile.current) {
-          isFetchingUserProfile.current = true
-
-          try {
-            // Fetch user profile
-            const { data: profile } = await supabase.from("user_profiles").select("*").eq("id", user.id).maybeSingle()
-
-            setUserProfile(profile || null)
-          } catch (error) {
-            console.error("Error fetching user profile:", error)
-            setUserProfile(null)
-          } finally {
-            isFetchingUserProfile.current = false
-          }
-        }
-      } catch (error) {
-        console.error("Error checking user:", error)
-        setCurrentUser(null)
-      }
-    }
-
-    checkUser()
-  }, [])
+    resetFetchedState()
+  }, [currentUser, resetFetchedState])
 
   // Fetch reviews for a service
   const fetchReviews = useCallback(
@@ -181,11 +79,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
       }
 
       try {
-        const { data, error } = await supabase
-          .from("service_reviews")
-          .select("*")
-          .eq("service_id", serviceId)
-          .order("created_at", { ascending: false })
+        const { data, error } = await reviewsService.fetchReviews(serviceId)
 
         if (error) {
           console.error("Error fetching reviews:", error)
@@ -201,11 +95,10 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
             if (reviewIds.length > 0) {
               try {
-                const { data: reactions, error: reactionsError } = await supabase
-                  .from("review_reactions")
-                  .select("review_id, reaction_type")
-                  .eq("user_id", currentUser.id)
-                  .in("review_id", reviewIds)
+                const { data: reactions, error: reactionsError } = await reviewsService.fetchReviewReactions(
+                  currentUser.id,
+                  reviewIds,
+                )
 
                 if (!reactionsError && reactions) {
                   const newUserReactions: Record<string, string> = {}
@@ -237,14 +130,8 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         setIsInitialLoading(false)
       }
     },
-    [currentUser],
+    [currentUser, setReviews, setUserReactions, setIsInitialLoading, fetchedReviewsRef],
   )
-
-  // Reset fetched state when current user changes
-  useEffect(() => {
-    fetchedReviewsRef.current = {}
-    fetchedCommentsRef.current = {}
-  }, [currentUser])
 
   // Fetch comments for a review
   const fetchComments = useCallback(
@@ -261,12 +148,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
       try {
         // Get all top-level comments for this review
-        const { data: topLevelComments, error: commentsError } = await supabase
-          .from("review_comments")
-          .select("*")
-          .eq("review_id", reviewId)
-          .is("parent_comment_id", null)
-          .order("created_at", { ascending: true })
+        const { data: topLevelComments, error: commentsError } = await reviewsService.fetchTopLevelComments(reviewId)
 
         if (commentsError) {
           console.error("Error fetching comments:", commentsError)
@@ -274,12 +156,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         }
 
         // Get all replies (comments with parent_comment_id)
-        const { data: allReplies, error: repliesError } = await supabase
-          .from("review_comments")
-          .select("*")
-          .is("review_id", null)
-          .not("parent_comment_id", "is", null)
-          .order("created_at", { ascending: true })
+        const { data: allReplies, error: repliesError } = await reviewsService.fetchAllReplies()
 
         if (repliesError) {
           console.error("Error fetching replies:", repliesError)
@@ -291,10 +168,9 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
         if (currentUser) {
           try {
-            const { data: reactions, error: reactionsError } = await supabase
-              .from("comment_reactions")
-              .select("comment_id, reaction_type")
-              .eq("user_id", currentUser.id)
+            const { data: reactions, error: reactionsError } = await reviewsService.fetchCommentReactions(
+              currentUser.id,
+            )
 
             if (!reactionsError && reactions) {
               reactions.forEach((reaction) => {
@@ -315,34 +191,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         }
 
         // Build comment tree
-        const commentMap = new Map<number, ReviewComment>()
-
-        // Process top-level comments
-        const processedTopComments =
-          topLevelComments?.map((comment) => {
-            const userReaction = userReactionsMap[`comment_${comment.id}`] || null
-            const processedComment = processSafeComment(comment, userReaction) as ReviewComment
-            commentMap.set(comment.id, processedComment)
-            return processedComment
-          }) || []
-
-        // Process replies and build the tree
-        allReplies?.forEach((reply) => {
-          if (!reply || !reply.id || !reply.parent_comment_id) return
-
-          const userReaction = userReactionsMap[`comment_${reply.id}`] || null
-          const processedReply = processSafeComment(reply, userReaction) as ReviewComment
-
-          commentMap.set(reply.id, processedReply)
-
-          // Add this reply to its parent's replies array
-          if (reply.parent_comment_id && commentMap.has(reply.parent_comment_id)) {
-            const parent = commentMap.get(reply.parent_comment_id)
-            if (parent && parent.replies) {
-              parent.replies.push(processedReply)
-            }
-          }
-        })
+        const processedTopComments = buildCommentTree(topLevelComments || [], allReplies || [], userReactionsMap)
 
         // Update comments state
         setComments((prev) => ({
@@ -361,7 +210,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         setCommentsLoading((prev) => ({ ...prev, [reviewId]: false }))
       }
     },
-    [currentUser, comments],
+    [currentUser, comments, setComments, setUserReactions, setCommentsLoading, fetchedCommentsRef],
   )
 
   // Submit a new review
@@ -418,24 +267,19 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         // Update UI optimistically
         setReviews((prev) => [optimisticReview, ...prev])
 
-        const { data, error } = await supabase
-          .from("service_reviews")
-          .insert({
-            service_id: serviceId,
-            user_id: currentUser.id,
-            author_name: authorName,
-            author_avatar: authorAvatar,
-            rating,
-            title,
-            content,
-            interface_rating: interfaceRating > 0 ? interfaceRating : null,
-            reliability_rating: reliabilityRating > 0 ? reliabilityRating : null,
-            content_rating: contentRating > 0 ? contentRating : null,
-            value_rating: valueRating > 0 ? valueRating : null,
-            likes: 0,
-            dislikes: 0,
-          })
-          .select()
+        const { data, error } = await reviewsService.submitReview({
+          service_id: serviceId,
+          user_id: currentUser.id,
+          author_name: authorName,
+          author_avatar: authorAvatar,
+          rating,
+          title,
+          content,
+          interface_rating: interfaceRating > 0 ? interfaceRating : null,
+          reliability_rating: reliabilityRating > 0 ? reliabilityRating : null,
+          content_rating: contentRating > 0 ? contentRating : null,
+          value_rating: valueRating > 0 ? valueRating : null,
+        })
 
         if (error) {
           console.error("Error submitting review:", error)
@@ -460,7 +304,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         setIsSubmitting(false)
       }
     },
-    [currentUser, userProfile],
+    [currentUser, userProfile, setReviews, setIsSubmitting],
   )
 
   // Submit a comment on a review
@@ -472,7 +316,6 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
       const reviewId = safeNumber(formData.get("reviewId"), 0)
       const content = safeString(formData.get("content"), "")
-      const serviceId = safeNumber(formData.get("serviceId"), 0)
 
       if (reviewId === 0 || !content.trim()) {
         return { success: false, error: "Missing required fields" }
@@ -517,20 +360,15 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         })
 
         // Perform actual API call
-        const { data, error } = await supabase
-          .from("review_comments")
-          .insert({
-            review_id: reviewId,
-            parent_comment_id: null,
-            user_id: currentUser.id,
-            author_name: authorName,
-            author_avatar: authorAvatar,
-            content,
-            likes: 0,
-            dislikes: 0,
-            nesting_level: 1,
-          })
-          .select()
+        const { data, error } = await reviewsService.submitComment({
+          review_id: reviewId,
+          parent_comment_id: null,
+          user_id: currentUser.id,
+          author_name: authorName,
+          author_avatar: authorAvatar,
+          content,
+          nesting_level: 1,
+        })
 
         if (error) {
           console.error("Error submitting comment:", error)
@@ -568,7 +406,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         setIsSubmitting(false)
       }
     },
-    [currentUser, userProfile],
+    [currentUser, userProfile, setComments, setIsSubmitting],
   )
 
   // Submit a reply to a comment
@@ -623,29 +461,11 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
 
         // Update UI optimistically
         setComments((prev) => {
-          const updateReplies = (commentList: ReviewComment[]): ReviewComment[] => {
-            return commentList.map((comment) => {
-              if (comment.id === parentCommentId) {
-                return {
-                  ...comment,
-                  replies: [...(comment.replies || []), optimisticReply],
-                }
-              }
-              if (comment.replies && comment.replies.length > 0) {
-                return {
-                  ...comment,
-                  replies: updateReplies(comment.replies),
-                }
-              }
-              return comment
-            })
-          }
-
           // If we know the reviewId
           if (reviewId) {
             return {
               ...prev,
-              [reviewId]: updateReplies(prev[reviewId] || []),
+              [reviewId]: updateCommentTreeWithReply(prev[reviewId] || [], parentCommentId, optimisticReply),
             }
           }
 
@@ -670,7 +490,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
             if (findParentComment(commentsList)) {
               return {
                 ...prev,
-                [revId]: updateReplies(prev[revId] || []),
+                [revId]: updateCommentTreeWithReply(prev[revId] || [], parentCommentId, optimisticReply),
               }
             }
           }
@@ -679,47 +499,24 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         })
 
         // Perform actual API call
-        const { data, error } = await supabase
-          .from("review_comments")
-          .insert({
-            review_id: null,
-            parent_comment_id: parentCommentId,
-            user_id: currentUser.id,
-            author_name: authorName,
-            author_avatar: authorAvatar,
-            content,
-            likes: 0,
-            dislikes: 0,
-            nesting_level: nestingLevel,
-          })
-          .select()
+        const { data, error } = await reviewsService.submitComment({
+          review_id: null,
+          parent_comment_id: parentCommentId,
+          user_id: currentUser.id,
+          author_name: authorName,
+          author_avatar: authorAvatar,
+          content,
+          nesting_level: nestingLevel,
+        })
 
         if (error) {
           console.error("Error submitting reply:", error)
 
           // Revert optimistic update on error
           setComments((prev) => {
-            const removeOptimisticReply = (commentList: ReviewComment[]): ReviewComment[] => {
-              return commentList.map((comment) => {
-                if (comment.id === parentCommentId) {
-                  return {
-                    ...comment,
-                    replies: (comment.replies || []).filter((r) => r.id !== optimisticReplyId),
-                  }
-                }
-                if (comment.replies && comment.replies.length > 0) {
-                  return {
-                    ...comment,
-                    replies: removeOptimisticReply(comment.replies),
-                  }
-                }
-                return comment
-              })
-            }
-
             const updatedComments = { ...prev }
             for (const reviewId in updatedComments) {
-              updatedComments[reviewId] = removeOptimisticReply(updatedComments[reviewId])
+              updatedComments[reviewId] = removeCommentFromTree(updatedComments[reviewId], optimisticReplyId)
             }
             return updatedComments
           })
@@ -732,27 +529,9 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           const newReply = processSafeComment(data[0], null) as ReviewComment
 
           setComments((prev) => {
-            const updateReplies = (commentList: ReviewComment[]): ReviewComment[] => {
-              return commentList.map((comment) => {
-                if (comment.id === parentCommentId) {
-                  return {
-                    ...comment,
-                    replies: (comment.replies || []).map((r) => (r.id === optimisticReplyId ? newReply : r)),
-                  }
-                }
-                if (comment.replies && comment.replies.length > 0) {
-                  return {
-                    ...comment,
-                    replies: updateReplies(comment.replies),
-                  }
-                }
-                return comment
-              })
-            }
-
             const updatedComments = { ...prev }
             for (const reviewId in updatedComments) {
-              updatedComments[reviewId] = updateReplies(updatedComments[reviewId])
+              updatedComments[reviewId] = replaceCommentInTree(updatedComments[reviewId], optimisticReplyId, newReply)
             }
             return updatedComments
           })
@@ -766,7 +545,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         setIsSubmitting(false)
       }
     },
-    [currentUser, userProfile],
+    [currentUser, userProfile, setComments, setIsSubmitting],
   )
 
   // React to a review (like/dislike)
@@ -814,30 +593,10 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         // Perform actual API call
         if (isRemovingReaction) {
           // Remove reaction
-          await supabase.from("review_reactions").delete().eq("review_id", reviewId).eq("user_id", currentUser.id)
+          await reviewsService.removeReviewReaction(reviewId, currentUser.id)
         } else {
-          // Check if user already reacted
-          const { data: existingReaction } = await supabase
-            .from("review_reactions")
-            .select("*")
-            .eq("review_id", reviewId)
-            .eq("user_id", currentUser.id)
-            .maybeSingle()
-
-          if (existingReaction) {
-            // Update existing reaction
-            await supabase
-              .from("review_reactions")
-              .update({ reaction_type: reactionType })
-              .eq("id", existingReaction.id)
-          } else {
-            // Create new reaction
-            await supabase.from("review_reactions").insert({
-              review_id: reviewId,
-              user_id: currentUser.id,
-              reaction_type: reactionType,
-            })
-          }
+          // Add or update reaction
+          await reviewsService.upsertReviewReaction(reviewId, currentUser.id, reactionType)
         }
 
         // Update review likes/dislikes count in database
@@ -861,7 +620,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
             if (reactionType === "dislike") dislikes++
           }
 
-          await supabase.from("service_reviews").update({ likes, dislikes }).eq("id", reviewId)
+          await reviewsService.updateReviewReactionCounts(reviewId, likes, dislikes)
         }
       } catch (error) {
         console.error("Error reacting to review:", error)
@@ -874,7 +633,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         }
       }
     },
-    [currentUser, userReactions, reviews, fetchReviews],
+    [currentUser, userReactions, reviews, setUserReactions, setReviews, fetchReviews, fetchedReviewsRef],
   )
 
   // React to a comment (like/dislike)
@@ -886,51 +645,24 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         // Optimistic update
         const currentReaction = userReactions[`comment_${commentId}`]
         const isRemovingReaction = currentReaction === reactionType
+        const newReaction = isRemovingReaction ? null : reactionType
 
         // Update UI immediately
         setUserReactions((prev) => ({
           ...prev,
-          [`comment_${commentId}`]: isRemovingReaction ? null : reactionType,
+          [`comment_${commentId}`]: newReaction,
         }))
 
         // Update comments state
         setComments((prev) => {
-          const updateCommentReaction = (commentList: ReviewComment[]): ReviewComment[] => {
-            return commentList.map((comment) => {
-              if (comment.id === commentId) {
-                let likes = safeNumber(comment.likes, 0)
-                let dislikes = safeNumber(comment.dislikes, 0)
-
-                // Remove previous reaction if exists
-                if (currentReaction === "like") likes = Math.max(0, likes - 1)
-                if (currentReaction === "dislike") dislikes = Math.max(0, dislikes - 1)
-
-                // Add new reaction if not removing
-                if (!isRemovingReaction) {
-                  if (reactionType === "like") likes++
-                  if (reactionType === "dislike") dislikes++
-                }
-
-                return {
-                  ...comment,
-                  likes,
-                  dislikes,
-                  user_reaction: isRemovingReaction ? null : (reactionType as "like" | "dislike" | null),
-                }
-              }
-              if (comment.replies && comment.replies.length > 0) {
-                return {
-                  ...comment,
-                  replies: updateCommentReaction(comment.replies),
-                }
-              }
-              return comment
-            })
-          }
-
           const updatedComments = { ...prev }
           for (const reviewId in updatedComments) {
-            updatedComments[reviewId] = updateCommentReaction(updatedComments[reviewId])
+            updatedComments[reviewId] = updateCommentReactionInTree(
+              updatedComments[reviewId],
+              commentId,
+              currentReaction,
+              newReaction,
+            )
           }
           return updatedComments
         })
@@ -938,30 +670,10 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         // Perform actual API call
         if (isRemovingReaction) {
           // Remove reaction
-          await supabase.from("comment_reactions").delete().eq("comment_id", commentId).eq("user_id", currentUser.id)
+          await reviewsService.removeCommentReaction(commentId, currentUser.id)
         } else {
-          // Check if user already reacted
-          const { data: existingReaction } = await supabase
-            .from("comment_reactions")
-            .select("*")
-            .eq("comment_id", commentId)
-            .eq("user_id", currentUser.id)
-            .maybeSingle()
-
-          if (existingReaction) {
-            // Update existing reaction
-            await supabase
-              .from("comment_reactions")
-              .update({ reaction_type: reactionType })
-              .eq("id", existingReaction.id)
-          } else {
-            // Create new reaction
-            await supabase.from("comment_reactions").insert({
-              comment_id: commentId,
-              user_id: currentUser.id,
-              reaction_type: reactionType,
-            })
-          }
+          // Add or update reaction
+          await reviewsService.upsertCommentReaction(commentId, currentUser.id, reactionType)
         }
 
         // Update comment likes/dislikes count in database
@@ -985,14 +697,14 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
             if (reactionType === "dislike") dislikes++
           }
 
-          await supabase.from("review_comments").update({ likes, dislikes }).eq("id", commentId)
+          await reviewsService.updateCommentReactionCounts(commentId, likes, dislikes)
         }
       } catch (error) {
         console.error("Error reacting to comment:", error)
         // No need to revert optimistic update as it would cause a full re-render
       }
     },
-    [currentUser, userReactions, comments],
+    [currentUser, userReactions, setUserReactions, setComments],
   )
 
   const value: ReviewsContextType = {
