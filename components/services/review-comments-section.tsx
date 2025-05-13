@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useEffect, useCallback, memo, useMemo } from "react"
+import { useState, useEffect, useCallback, memo, useMemo, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -11,7 +11,7 @@ import { CommentSkeleton } from "./comment-skeleton"
 import { useReviews } from "@/contexts/reviews-context"
 import { safeInitials } from "@/lib/data-safety-utils"
 import { cn } from "@/lib/utils"
-import { ChevronDown } from "lucide-react"
+import { Loader2 } from "lucide-react"
 import { ScrollArea } from "@/components/ui/scroll-area"
 
 interface ReviewCommentsSectionProps {
@@ -19,7 +19,7 @@ interface ReviewCommentsSectionProps {
   serviceId: number
 }
 
-const COMMENTS_PER_PAGE = 5
+const COMMENTS_PER_BATCH = 5
 
 export const ReviewCommentsSection = memo(function ReviewCommentsSection({
   reviewId,
@@ -29,12 +29,23 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
     useReviews()
   const [commentContent, setCommentContent] = useState("")
   const [localSubmitting, setLocalSubmitting] = useState(false)
-  const [visibleComments, setVisibleComments] = useState(COMMENTS_PER_PAGE)
+  const [visibleComments, setVisibleComments] = useState(COMMENTS_PER_BATCH)
+  const [loadingMore, setLoadingMore] = useState(false)
+
+  // Refs for infinite scrolling
+  const loaderRef = useRef<HTMLDivElement>(null)
+  const prevCommentsLengthRef = useRef(0)
 
   // Fetch comments for this review
   useEffect(() => {
     fetchComments(reviewId)
   }, [reviewId, fetchComments])
+
+  // Reset visible comments when review changes
+  useEffect(() => {
+    setVisibleComments(COMMENTS_PER_BATCH)
+    prevCommentsLengthRef.current = 0
+  }, [reviewId])
 
   // Handle comment submission with optimistic updates
   const handleCommentSubmit = useCallback(
@@ -70,15 +81,44 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
   const reviewComments = comments[reviewId] || []
   const isLoading = commentsLoading[reviewId]
 
-  // Show more comments
-  const handleShowMoreComments = useCallback(() => {
-    setVisibleComments((prev) => prev + COMMENTS_PER_PAGE)
-  }, [])
-
-  // Reset visible comments when review changes
+  // Set up intersection observer for infinite scrolling
   useEffect(() => {
-    setVisibleComments(COMMENTS_PER_PAGE)
-  }, [reviewId])
+    const currentLoaderRef = loaderRef.current
+
+    if (!currentLoaderRef) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const target = entries[0]
+        if (target.isIntersecting && !loadingMore && reviewComments.length > visibleComments) {
+          setLoadingMore(true)
+          // Simulate network delay for smoother UX
+          setTimeout(() => {
+            setVisibleComments((prev) => prev + COMMENTS_PER_BATCH)
+            setLoadingMore(false)
+          }, 300)
+        }
+      },
+      { threshold: 0.1 },
+    )
+
+    observer.observe(currentLoaderRef)
+
+    return () => {
+      if (currentLoaderRef) {
+        observer.unobserve(currentLoaderRef)
+      }
+    }
+  }, [reviewComments.length, visibleComments, loadingMore])
+
+  // Update visible comments when new comments are added
+  useEffect(() => {
+    if (reviewComments.length > prevCommentsLengthRef.current && prevCommentsLengthRef.current > 0) {
+      // If new comments were added, make sure they're visible
+      setVisibleComments((prev) => Math.max(prev, reviewComments.length))
+    }
+    prevCommentsLengthRef.current = reviewComments.length
+  }, [reviewComments.length])
 
   // Get user display name and avatar
   const userDisplayName =
@@ -157,21 +197,19 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
                   isOptimistic={comment.isOptimistic}
                 />
               ))}
-            </div>
 
-            {hasMoreComments && (
-              <div className="pt-4 pb-2 text-center">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleShowMoreComments}
-                  className="text-xs flex items-center gap-1"
-                >
-                  <ChevronDown className="h-3.5 w-3.5" />
-                  Show more comments ({reviewComments.length - visibleComments} remaining)
-                </Button>
-              </div>
-            )}
+              {/* Intersection observer target */}
+              {hasMoreComments && (
+                <div ref={loaderRef} className="py-4 flex justify-center" aria-hidden="true">
+                  {loadingMore && (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>Loading more comments...</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </ScrollArea>
         </div>
       )}
