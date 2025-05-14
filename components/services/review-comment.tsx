@@ -1,18 +1,17 @@
 "use client"
 
 import type React from "react"
-
-import { useState, useCallback, memo } from "react"
+import { useState, useCallback, memo, useRef, useEffect } from "react"
 import { formatDistanceToNow } from "date-fns"
 import { Textarea } from "@/components/ui/textarea"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { ThumbsUp, ThumbsDown, Reply, MoreHorizontal, ChevronDown, ChevronUp } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
+import { ThumbsUp, ThumbsDown, ChevronDown, ChevronUp } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { ReviewComment as ReviewCommentType } from "@/types/reviews"
 import { useReviews } from "@/contexts/reviews-context"
 import { safeInitials } from "@/lib/data-safety-utils"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 
 interface ReviewCommentProps {
   comment: ReviewCommentType
@@ -20,23 +19,36 @@ interface ReviewCommentProps {
   isOptimistic?: boolean
 }
 
+// Facebook-like comment display values
+const INITIAL_REPLIES_TO_SHOW = 3
+const REPLIES_BATCH_SIZE = 5
+const MAX_VISIBLE_REPLIES = 15 // After this, we'll show "View all replies"
+
 export const ReviewComment = memo(function ReviewComment({ comment, serviceId, isOptimistic }: ReviewCommentProps) {
   const [isReplying, setIsReplying] = useState(false)
   const [replyContent, setReplyContent] = useState("")
-  const [showAllReplies, setShowAllReplies] = useState(false)
-  const [isExpanded, setIsExpanded] = useState(true)
+  const [showReplies, setShowReplies] = useState(false)
+  const [visibleRepliesCount, setVisibleRepliesCount] = useState(INITIAL_REPLIES_TO_SHOW)
+  const [isLoadingReplies, setIsLoadingReplies] = useState(false)
+  const [hasReachedMaxReplies, setHasReachedMaxReplies] = useState(false)
+  const replyTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const newReplyRef = useRef<HTMLDivElement>(null)
   const { submitCommentReply, reactToComment, currentUser, userProfile, isSubmitting } = useReviews()
-
-  // Calculate nesting level for indentation
-  const nestingLevel = comment.nesting_level || 1
-  const maxNestingLevel = 5 // Max visual nesting level
 
   // Process replies
   const replies = comment.replies || []
   const hasReplies = replies.length > 0
-  const initialReplyCount = 2
-  const visibleReplies = showAllReplies ? replies : replies.slice(0, initialReplyCount)
-  const hasMoreReplies = replies.length > initialReplyCount
+  const replyCount = replies.length
+
+  // Calculate which replies to show
+  const visibleReplies = hasReachedMaxReplies
+    ? replies.slice(0, MAX_VISIBLE_REPLIES)
+    : showReplies
+      ? replies.slice(0, visibleRepliesCount)
+      : []
+
+  const remainingReplies = replyCount - visibleReplies.length
+  const hasMoreReplies = remainingReplies > 0
 
   // Format date
   const formattedDate = (() => {
@@ -46,6 +58,22 @@ export const ReviewComment = memo(function ReviewComment({ comment, serviceId, i
       return "unknown time ago"
     }
   })()
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (replyTimeoutRef.current) {
+        clearTimeout(replyTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  // Scroll to new reply when added
+  useEffect(() => {
+    if (isOptimistic && newReplyRef.current) {
+      newReplyRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" })
+    }
+  }, [isOptimistic])
 
   // Handle reply submission
   const handleReplySubmit = useCallback(
@@ -66,12 +94,17 @@ export const ReviewComment = memo(function ReviewComment({ comment, serviceId, i
         // Close the reply form
         setIsReplying(false)
 
+        // Show replies when a new reply is submitted
+        setShowReplies(true)
+        // Make sure we'll see the new reply
+        setVisibleRepliesCount((prev) => Math.max(prev, replies.length + 1))
+
         await submitCommentReply(formData)
       } catch (error) {
         console.error("Error submitting reply:", error)
       }
     },
-    [replyContent, comment, currentUser, serviceId, submitCommentReply],
+    [replyContent, comment, currentUser, serviceId, submitCommentReply, replies.length],
   )
 
   // Handle comment reaction
@@ -83,15 +116,35 @@ export const ReviewComment = memo(function ReviewComment({ comment, serviceId, i
     [comment.id, currentUser, reactToComment],
   )
 
-  // Toggle showing all replies
-  const toggleShowAllReplies = useCallback(() => {
-    setShowAllReplies((prev) => !prev)
+  // Toggle showing replies
+  const toggleReplies = useCallback(() => {
+    setShowReplies((prev) => !prev)
   }, [])
 
-  // Toggle comment expansion
-  const toggleExpanded = useCallback(() => {
-    setIsExpanded((prev) => !prev)
-  }, [])
+  // Load more replies with simulated loading state
+  const loadMoreReplies = useCallback(() => {
+    if (isLoadingReplies) return
+
+    setIsLoadingReplies(true)
+
+    // Simulate network delay for smoother UX (Facebook-like behavior)
+    replyTimeoutRef.current = setTimeout(() => {
+      setVisibleRepliesCount((prev) => {
+        const newValue = prev + REPLIES_BATCH_SIZE
+        if (newValue >= MAX_VISIBLE_REPLIES) {
+          setHasReachedMaxReplies(true)
+        }
+        return newValue
+      })
+      setIsLoadingReplies(false)
+    }, 500)
+  }, [isLoadingReplies])
+
+  // View all replies
+  const viewAllReplies = useCallback(() => {
+    setHasReachedMaxReplies(false)
+    setVisibleRepliesCount(replyCount)
+  }, [replyCount])
 
   // Get user display name and avatar
   const userDisplayName =
@@ -101,165 +154,139 @@ export const ReviewComment = memo(function ReviewComment({ comment, serviceId, i
     "Anonymous"
   const userAvatar = userProfile?.avatar_url || currentUser?.user_metadata?.avatar_url || "/placeholder.svg"
 
-  // If comment is collapsed and has replies, show a compact view
-  if (!isExpanded && hasReplies) {
-    return (
-      <div className="relative group py-2">
-        <div className="flex items-center justify-between bg-muted/30 px-3 py-2 rounded-lg">
-          <div className="flex items-center gap-2">
-            <Avatar className="h-6 w-6">
-              <AvatarImage src={comment.author_avatar || "/placeholder.svg"} alt={comment.author_name} />
-              <AvatarFallback className="text-xs bg-primary/10 text-primary">
-                {safeInitials(comment.author_name)}
-              </AvatarFallback>
-            </Avatar>
-            <span className="font-medium text-sm">{comment.author_name}</span>
-            <span className="text-muted-foreground text-xs">{formattedDate}</span>
-            <span className="text-muted-foreground text-xs">
-              {replies.length} {replies.length === 1 ? "reply" : "replies"}
-            </span>
-          </div>
-          <Button variant="ghost" size="sm" onClick={toggleExpanded} className="h-7 w-7 p-0">
-            <ChevronDown className="h-4 w-4" />
-            <span className="sr-only">Expand</span>
-          </Button>
-        </div>
-      </div>
-    )
-  }
-
   return (
-    <div
-      className={cn(
-        "relative group",
-        isOptimistic && "opacity-70",
-        nestingLevel > 1 && "ml-2 sm:ml-6 md:ml-8 pl-2 sm:pl-3 border-l border-muted",
-      )}
-    >
-      {/* Comment header with user info and actions */}
-      <div className="flex items-start gap-2">
-        <Avatar className={cn("flex-shrink-0 mt-0.5", nestingLevel <= maxNestingLevel ? "h-7 w-7" : "h-6 w-6")}>
+    <div className={cn("group", isOptimistic && "opacity-70")} ref={isOptimistic ? newReplyRef : undefined}>
+      <div className="flex gap-2">
+        <Avatar className="h-8 w-8 flex-shrink-0">
           <AvatarImage src={comment.author_avatar || "/placeholder.svg"} alt={comment.author_name} />
-          <AvatarFallback className="text-xs bg-primary/10 text-primary">
+          <AvatarFallback className="bg-primary/10 text-primary text-xs">
             {safeInitials(comment.author_name)}
           </AvatarFallback>
         </Avatar>
 
         <div className="flex-1 min-w-0">
-          <div className="bg-muted/40 px-3 py-2 rounded-xl">
-            <div className="flex items-center justify-between gap-2 mb-1">
-              <div className="flex items-center gap-2">
-                <span className="font-medium text-sm">{comment.author_name}</span>
-                <span className="text-muted-foreground text-xs">{formattedDate}</span>
-              </div>
-
-              {/* Actions dropdown - removed collapse option */}
-              {currentUser && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0 opacity-0 group-hover:opacity-100">
-                      <MoreHorizontal className="h-4 w-4" />
-                      <span className="sr-only">More options</span>
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-[160px]">
-                    <DropdownMenuItem onClick={() => setIsReplying(!isReplying)}>
-                      {isReplying ? "Cancel reply" : "Reply"}
-                    </DropdownMenuItem>
-                    {/* We could add other options here like Report, etc. */}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )}
+          {/* Comment bubble */}
+          <div className="bg-muted/40 px-3 py-2 rounded-xl inline-block max-w-full">
+            <div className="flex flex-col">
+              <span className="font-medium text-sm">{comment.author_name}</span>
+              <p className="text-sm whitespace-pre-wrap break-words">{comment.content}</p>
             </div>
-
-            {/* Comment content */}
-            <p className="text-sm whitespace-pre-wrap break-words">{comment.content}</p>
           </div>
 
           {/* Comment actions */}
-          <div className="flex items-center gap-2 pl-1 mt-1 mb-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              className={cn("h-7 px-2 gap-1 text-xs", comment.user_reaction === "like" && "text-primary")}
+          <div className="flex items-center gap-3 mt-1 text-xs">
+            <button
+              className={cn(
+                "font-medium hover:underline",
+                comment.user_reaction === "like" ? "text-primary" : "text-muted-foreground",
+              )}
               onClick={() => handleReaction("like")}
               disabled={!currentUser}
             >
-              <ThumbsUp className={cn("h-3.5 w-3.5", comment.user_reaction === "like" && "fill-current")} />
-              <span>{comment.likes || 0}</span>
-            </Button>
-
-            <Button
-              variant="ghost"
-              size="sm"
-              className={cn("h-7 px-2 gap-1 text-xs", comment.user_reaction === "dislike" && "text-primary")}
+              Like
+            </button>
+            <button
+              className={cn(
+                "font-medium hover:underline",
+                comment.user_reaction === "dislike" ? "text-primary" : "text-muted-foreground",
+              )}
               onClick={() => handleReaction("dislike")}
               disabled={!currentUser}
             >
-              <ThumbsDown className={cn("h-3.5 w-3.5", comment.user_reaction === "dislike" && "fill-current")} />
-              <span>{comment.dislikes || 0}</span>
-            </Button>
-
-            {currentUser && !isReplying && (
-              <Button variant="ghost" size="sm" className="h-7 px-2 gap-1 text-xs" onClick={() => setIsReplying(true)}>
-                <Reply className="h-3.5 w-3.5" />
-                <span>Reply</span>
-              </Button>
+              Dislike
+            </button>
+            {currentUser && (
+              <button
+                className="font-medium text-muted-foreground hover:underline"
+                onClick={() => setIsReplying(!isReplying)}
+              >
+                Reply
+              </button>
             )}
+            <span className="text-muted-foreground">{formattedDate}</span>
 
-            {/* Collapse/expand button - only show for comments with replies */}
-            {hasReplies && (
-              <Button variant="ghost" size="sm" className="h-7 px-2 gap-1 text-xs ml-auto" onClick={toggleExpanded}>
-                {isExpanded ? (
-                  <>
-                    <ChevronUp className="h-3.5 w-3.5" />
-                    <span className="sr-only md:not-sr-only">Collapse</span>
-                  </>
-                ) : (
-                  <>
-                    <ChevronDown className="h-3.5 w-3.5" />
-                    <span className="sr-only md:not-sr-only">Expand</span>
-                  </>
+            {/* Like count */}
+            {(comment.likes > 0 || comment.dislikes > 0) && (
+              <div className="flex items-center gap-1 ml-auto">
+                {comment.likes > 0 && (
+                  <div className="flex items-center">
+                    <div className="bg-primary text-primary-foreground rounded-full w-4 h-4 flex items-center justify-center">
+                      <ThumbsUp className="h-2.5 w-2.5" />
+                    </div>
+                    <span className="ml-1">{comment.likes}</span>
+                  </div>
                 )}
-              </Button>
+                {comment.dislikes > 0 && (
+                  <div className="flex items-center ml-1">
+                    <div className="bg-muted text-muted-foreground rounded-full w-4 h-4 flex items-center justify-center">
+                      <ThumbsDown className="h-2.5 w-2.5" />
+                    </div>
+                    <span className="ml-1">{comment.dislikes}</span>
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
           {/* Reply form */}
           {isReplying && (
-            <form onSubmit={handleReplySubmit} className="mt-2 mb-4 space-y-2">
-              <Textarea
-                value={replyContent}
-                onChange={(e) => setReplyContent(e.target.value)}
-                placeholder={`Reply to ${comment.author_name}...`}
-                className="min-h-[60px] resize-none text-sm rounded-xl py-2 bg-muted/30"
-                disabled={isSubmitting}
-              />
-              <div className="flex justify-end gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 text-xs"
-                  onClick={() => setIsReplying(false)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  size="sm"
-                  className={cn("h-8 text-xs bg-primary hover:bg-primary/90", isSubmitting && "opacity-70")}
-                  disabled={isSubmitting || !replyContent.trim()}
-                >
-                  {isSubmitting ? "Posting..." : "Post Reply"}
-                </Button>
-              </div>
-            </form>
+            <div className="mt-2 pl-2">
+              <form onSubmit={handleReplySubmit} className="flex items-start gap-2">
+                <Avatar className="h-6 w-6 mt-1 flex-shrink-0">
+                  <AvatarImage src={userAvatar || "/placeholder.svg"} alt={userDisplayName} />
+                  <AvatarFallback className="bg-primary/10 text-primary text-[10px]">
+                    {safeInitials(userDisplayName)}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="flex-1">
+                  <Textarea
+                    value={replyContent}
+                    onChange={(e) => setReplyContent(e.target.value)}
+                    placeholder={`Reply to ${comment.author_name}...`}
+                    className="min-h-[60px] resize-none text-sm rounded-xl py-2 bg-muted/30"
+                    disabled={isSubmitting}
+                    autoFocus
+                  />
+                  <div className="flex justify-end mt-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs mr-2"
+                      onClick={() => setIsReplying(false)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="submit"
+                      size="sm"
+                      className={cn("h-7 text-xs", isSubmitting && "opacity-70")}
+                      disabled={isSubmitting || !replyContent.trim()}
+                    >
+                      Reply
+                    </Button>
+                  </div>
+                </div>
+              </form>
+            </div>
           )}
 
-          {/* Nested replies - only render if expanded */}
-          {isExpanded && hasReplies && (
-            <div className="space-y-3 mt-2">
+          {/* View replies button - only shown when there are replies and they're hidden */}
+          {hasReplies && !showReplies && (
+            <button
+              className="flex items-center gap-1 mt-1 text-xs text-muted-foreground hover:text-foreground transition-colors pl-2"
+              onClick={toggleReplies}
+            >
+              <ChevronDown className="h-3 w-3" />
+              <span>
+                View {replyCount} {replyCount === 1 ? "reply" : "replies"}
+              </span>
+            </button>
+          )}
+
+          {/* Replies */}
+          {showReplies && hasReplies && (
+            <div className="pl-4 mt-2 space-y-3 border-l-2 border-muted ml-2">
               {visibleReplies.map((reply) => (
                 <ReviewComment
                   key={`reply-${reply.id}`}
@@ -269,36 +296,44 @@ export const ReviewComment = memo(function ReviewComment({ comment, serviceId, i
                 />
               ))}
 
-              {hasMoreReplies && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-xs text-muted-foreground h-auto p-0 flex items-center gap-1"
-                  onClick={toggleShowAllReplies}
-                >
-                  {showAllReplies ? (
-                    <>
-                      <ChevronUp className="h-3.5 w-3.5" />
-                      <span>Show fewer replies</span>
-                    </>
-                  ) : (
-                    <>
-                      <ChevronDown className="h-3.5 w-3.5" />
-                      <span>
-                        Show {replies.length - initialReplyCount} more{" "}
-                        {replies.length - initialReplyCount === 1 ? "reply" : "replies"}
-                      </span>
-                    </>
-                  )}
-                </Button>
-              )}
-
-              {/* Show message when reaching max nesting */}
-              {nestingLevel >= maxNestingLevel && currentUser && (
-                <div className="text-xs text-muted-foreground italic mt-2">
-                  Maximum reply depth reached. Please continue the conversation in a new comment.
+              {/* Loading replies indicator */}
+              {isLoadingReplies && (
+                <div className="flex items-center gap-2 pl-2 py-1">
+                  <Spinner size="sm" className="text-primary" />
+                  <span className="text-xs text-muted-foreground">Loading replies...</span>
                 </div>
               )}
+
+              {/* Load more replies UI */}
+              {hasMoreReplies && !isLoadingReplies && (
+                <div className="pl-2">
+                  {hasReachedMaxReplies ? (
+                    <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={viewAllReplies}>
+                      View all {replyCount} replies
+                    </Button>
+                  ) : (
+                    <button
+                      className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                      onClick={loadMoreReplies}
+                    >
+                      <ChevronDown className="h-3 w-3" />
+                      <span>
+                        View {Math.min(remainingReplies, REPLIES_BATCH_SIZE)} more{" "}
+                        {Math.min(remainingReplies, REPLIES_BATCH_SIZE) === 1 ? "reply" : "replies"}
+                      </span>
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Hide replies button */}
+              <button
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors pl-2"
+                onClick={toggleReplies}
+              >
+                <ChevronUp className="h-3 w-3" />
+                <span>Hide replies</span>
+              </button>
             </div>
           )}
         </div>

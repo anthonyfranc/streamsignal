@@ -148,12 +148,10 @@ export const ReviewItem = memo(function ReviewItem({ review, serviceId }: Review
         </div>
       </div>
 
-      {/* Comments section - Fixed height with internal scrolling */}
+      {/* Comments section */}
       {commentsExpanded && (
         <div className="pl-10 pt-2 mt-2 border-t border-muted">
-          <div className="relative">
-            <ReviewCommentsSection reviewId={review.id} serviceId={serviceId} />
-          </div>
+          <ReviewCommentsSection reviewId={review.id} serviceId={serviceId} />
         </div>
       )}
     </div>
