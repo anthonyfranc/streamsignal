@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { useEffect, useState } from "react"
 
 import { MegaMenu } from "@/components/mega-menu"
 import { AuthButton } from "@/components/auth/auth-button"
@@ -26,6 +27,22 @@ interface SiteHeaderProps {
 export function SiteHeader({ featuredServices = [], featuredChannels = [] }: SiteHeaderProps) {
   const { user, userProfile, isLoading, signOut } = useAuth()
   const router = useRouter()
+  const [showSkeleton, setShowSkeleton] = useState(true)
+
+  // Add a timeout to hide the skeleton after a maximum time
+  // This prevents the skeleton from showing indefinitely
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowSkeleton(false)
+    }, 2000) // 2 seconds max loading time
+
+    if (!isLoading) {
+      setShowSkeleton(false)
+      clearTimeout(timer)
+    }
+
+    return () => clearTimeout(timer)
+  }, [isLoading])
 
   const handleSignOut = async () => {
     await signOut()
@@ -85,7 +102,7 @@ export function SiteHeader({ featuredServices = [], featuredChannels = [] }: Sit
             <MegaMenu featuredServices={featuredServices} featuredChannels={featuredChannels} />
           </nav>
           <div className="flex items-center space-x-2">
-            {isLoading ? (
+            {showSkeleton ? (
               // Show skeleton loader while checking auth status
               <div className="h-9 w-16 animate-pulse rounded-md bg-muted"></div>
             ) : user ? (
