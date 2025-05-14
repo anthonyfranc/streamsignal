@@ -33,7 +33,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Function to fetch user profile
   const fetchUserProfile = async (userId: string) => {
     try {
-      const { data, error } = await supabaseBrowser.from("user_profiles").select("*").eq("id", userId).single()
+      // First try with user_id field
+      let { data, error } = await supabaseBrowser.from("user_profiles").select("*").eq("user_id", userId).single()
+
+      // If that fails, try with id field
+      if (error) {
+        console.log("Trying to fetch profile with id field instead of user_id")
+        const result = await supabaseBrowser.from("user_profiles").select("*").eq("id", userId).single()
+
+        data = result.data
+        error = result.error
+      }
 
       if (error) {
         console.error("Error fetching user profile:", error)
@@ -50,6 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Function to refresh the session and user data
   const refreshSession = async () => {
     try {
+      console.log("Refreshing session...")
       const { data, error } = await supabaseBrowser.auth.getSession()
 
       if (error) {
@@ -62,20 +73,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const currentSession = data.session
+      console.log("Session refreshed:", currentSession ? "Session found" : "No session")
+
       setSession(currentSession)
 
       if (currentSession?.user) {
+        console.log("User found in session:", currentSession.user.id)
         setUser(currentSession.user)
+
         const profile = await fetchUserProfile(currentSession.user.id)
+        console.log("User profile:", profile ? "Profile found" : "No profile found")
         setUserProfile(profile)
       } else {
         setUser(null)
         setUserProfile(null)
       }
-
-      setIsLoading(false)
     } catch (error) {
       console.error("Exception refreshing session:", error)
+    } finally {
       setIsLoading(false)
     }
   }
@@ -93,16 +108,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } = supabaseBrowser.auth.onAuthStateChange(async (event, currentSession) => {
       console.log("Auth state changed:", event)
 
-      if (currentSession) {
-        setSession(currentSession)
+      setSession(currentSession)
+
+      if (currentSession?.user) {
+        console.log("User found in auth change:", currentSession.user.id)
         setUser(currentSession.user)
 
-        if (currentSession.user) {
-          const profile = await fetchUserProfile(currentSession.user.id)
-          setUserProfile(profile)
-        }
+        const profile = await fetchUserProfile(currentSession.user.id)
+        console.log("User profile from auth change:", profile ? "Profile found" : "No profile found")
+        setUserProfile(profile)
       } else {
-        setSession(null)
         setUser(null)
         setUserProfile(null)
       }
@@ -119,6 +134,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = async () => {
     setIsLoading(true)
     try {
+      // Clear any custom tokens we might have set
+      try {
+        localStorage.removeItem("streamsignal_auth_token")
+        localStorage.removeItem("supabase.auth.token")
+      } catch (e) {
+        console.error("Error clearing local storage:", e)
+      }
+
       const { error } = await supabaseBrowser.auth.signOut()
       if (error) {
         console.error("Error signing out:", error)
