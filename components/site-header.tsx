@@ -1,13 +1,12 @@
 "use client"
 
 import Link from "next/link"
-import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 
 import { MegaMenu } from "@/components/mega-menu"
 import { AuthButton } from "@/components/auth/auth-button"
 import { UserAvatar } from "@/components/auth/user-avatar"
-import { supabase } from "@/lib/supabase-client"
+import { useAuth } from "@/contexts/auth-context"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,66 +24,11 @@ interface SiteHeaderProps {
 }
 
 export function SiteHeader({ featuredServices = [], featuredChannels = [] }: SiteHeaderProps) {
-  const [user, setUser] = useState<any>(null)
-  const [userProfile, setUserProfile] = useState<any>(null)
-  const [isLoading, setIsLoading] = useState(true)
+  const { user, userProfile, isLoading, signOut } = useAuth()
   const router = useRouter()
 
-  useEffect(() => {
-    // Get the initial user state
-    const getInitialUser = async () => {
-      setIsLoading(true)
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
-
-      const currentUser = session?.user || null
-      setUser(currentUser)
-
-      if (currentUser) {
-        // Fetch user profile
-        const { data: profile } = await supabase
-          .from("user_profiles")
-          .select("*")
-          .eq("user_id", currentUser.id)
-          .single()
-
-        setUserProfile(profile)
-      }
-
-      setIsLoading(false)
-    }
-
-    getInitialUser()
-
-    // Subscribe to auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      const currentUser = session?.user || null
-      setUser(currentUser)
-
-      if (currentUser) {
-        // Fetch user profile
-        const { data: profile } = await supabase
-          .from("user_profiles")
-          .select("*")
-          .eq("user_id", currentUser.id)
-          .single()
-
-        setUserProfile(profile)
-      } else {
-        setUserProfile(null)
-      }
-    })
-
-    return () => {
-      subscription.unsubscribe()
-    }
-  }, [])
-
   const handleSignOut = async () => {
-    await supabase.auth.signOut()
+    await signOut()
     router.refresh()
   }
 

@@ -8,6 +8,7 @@ import { useIsAdminRoute, useIsLoginPage } from "@/utils/route-utils"
 import { useEffect, useState } from "react"
 import { getFeaturedServices } from "@/app/actions/service-actions"
 import { getFeaturedChannels } from "@/app/actions/channel-actions"
+import { AuthProvider } from "@/contexts/auth-context"
 
 export function ClientLayout({ children }: { children: React.ReactNode }) {
   const isAdminRoute = useIsAdminRoute()
@@ -45,15 +46,21 @@ export function ClientLayout({ children }: { children: React.ReactNode }) {
 
   // For login page, use a minimal layout
   if (isLoginPage) {
-    return <div className="relative flex min-h-screen flex-col">{children}</div>
+    return (
+      <AuthProvider>
+        <div className="relative flex min-h-screen flex-col">{children}</div>
+      </AuthProvider>
+    )
   }
 
   // For non-admin routes, include the header and footer
   return (
-    <div className="relative flex min-h-screen flex-col">
-      <SiteHeader featuredServices={featuredServices} featuredChannels={featuredChannels} />
-      <main className="flex-1">{children}</main>
-      <SiteFooter />
-    </div>
+    <AuthProvider>
+      <div className="relative flex min-h-screen flex-col">
+        <SiteHeader featuredServices={featuredServices} featuredChannels={featuredChannels} />
+        <main className="flex-1">{children}</main>
+        <SiteFooter />
+      </div>
+    </AuthProvider>
   )
 }
