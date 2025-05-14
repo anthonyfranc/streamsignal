@@ -98,15 +98,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Initialize auth state
   useEffect(() => {
     console.log("AuthProvider: Initializing auth state")
+    let mounted = true
 
-    // Immediately refresh the session
-    refreshSession()
+    async function initializeAuth() {
+      try {
+        const { data: { session: initialSession }, error } = await supabaseBrowser.auth.getSession()
+        
+        if (!mounted) return
+        
+        if (error) {
+          console.error("Error getting initial session:", error)
+          setIsLoading(false)
+          return
+        }
+
+        if (initialSession?.user) {
+          setSession(initialSession)
+          setUser(initialSession.user)
+          const profile = await fetchUserProfile(initialSession.user.id)
+          if (mounted) {
+            setUserProfile(profile)
+          }
+        }
+      } catch (error) {
+        console.error("Error initializing auth:", error)
+      } finally {
+        if (mounted) {
+          setIsLoading(false)
+        }
+      }
+    }
+
+    initializeAuth()
 
     // Subscribe to auth changes
     const {
       data: { subscription },
     } = supabaseBrowser.auth.onAuthStateChange(async (event, currentSession) => {
       console.log("Auth state changed:", event)
+
+      if (!mounted) return
 
       setSession(currentSession)
 
@@ -115,8 +146,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(currentSession.user)
 
         const profile = await fetchUserProfile(currentSession.user.id)
-        console.log("User profile from auth change:", profile ? "Profile found" : "No profile found")
-        setUserProfile(profile)
+        if (mounted) {
+          console.log("User profile from auth change:", profile ? "Profile found" : "No profile found")
+          setUserProfile(profile)
+        }
       } else {
         setUser(null)
         setUserProfile(null)
@@ -126,6 +159,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })
 
     return () => {
+      mounted = false
       subscription.unsubscribe()
     }
   }, [])
