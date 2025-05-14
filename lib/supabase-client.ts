@@ -1,41 +1,26 @@
 import { createClient } from "@supabase/supabase-js"
 import { cache } from "react"
 
-// Create a single supabase client for the entire application
-export const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "",
-  {
-    auth: {
-      persistSession: true,
-      storageKey: "streamsignal_auth_token",
-      autoRefreshToken: true,
-      detectSessionInUrl: true,
-    },
-  },
-)
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
-// Create a single supabase client for the browser
-const createBrowserClient = () => {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL as string
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string
-
-  if (!supabaseUrl || !supabaseAnonKey) {
-    console.error("Missing Supabase environment variables for browser client:", {
-      hasUrl: !!supabaseUrl,
-      hasAnonKey: !!supabaseAnonKey,
-    })
-  }
-
-  return createClient(supabaseUrl, supabaseAnonKey, {
-    auth: {
-      persistSession: true,
-      storageKey: "streamsignal_auth_token",
-      autoRefreshToken: true,
-      detectSessionInUrl: true,
-    },
-  })
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error("Missing Supabase environment variables")
+  throw new Error("Missing Supabase environment variables")
 }
+
+// Create a single supabase client for browser-side usage
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: true,
+    storageKey: "supabase_auth_token",
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+  },
+})
+
+// For consistency with our auth context
+export const supabaseBrowser = supabase
 
 // Create a single supabase client for server components
 const createServerClient = () => {
@@ -54,9 +39,6 @@ const createServerClient = () => {
 
   return createClient(supabaseUrl, supabaseServiceKey)
 }
-
-// For client components
-export const supabaseBrowser = createBrowserClient()
 
 // For server components
 export const supabaseServer = createServerClient()

@@ -50,7 +50,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Function to refresh the session and user data
   const refreshSession = async () => {
     try {
-      setIsLoading(true)
       const { data, error } = await supabaseBrowser.auth.getSession()
 
       if (error) {
@@ -58,6 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(null)
         setUser(null)
         setUserProfile(null)
+        setIsLoading(false)
         return
       }
 
@@ -72,34 +72,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(null)
         setUserProfile(null)
       }
+
+      setIsLoading(false)
     } catch (error) {
       console.error("Exception refreshing session:", error)
-    } finally {
       setIsLoading(false)
     }
   }
 
   // Initialize auth state
   useEffect(() => {
-    // Check for existing session in localStorage first for immediate UI update
-    const checkLocalStorage = () => {
-      try {
-        const storedSession = localStorage.getItem("streamsignal_auth_token")
-        if (storedSession) {
-          // We have a session in localStorage, set loading to false to show logged-in UI immediately
-          // The actual session will be validated by refreshSession
-          setIsLoading(false)
-        }
-      } catch (error) {
-        // localStorage might not be available in some contexts
-        console.error("Error checking localStorage:", error)
-      }
-    }
+    console.log("AuthProvider: Initializing auth state")
 
-    // Try to check localStorage first
-    checkLocalStorage()
-
-    // Then refresh the session properly
+    // Immediately refresh the session
     refreshSession()
 
     // Subscribe to auth changes
@@ -107,13 +92,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       data: { subscription },
     } = supabaseBrowser.auth.onAuthStateChange(async (event, currentSession) => {
       console.log("Auth state changed:", event)
-      setSession(currentSession)
 
-      if (currentSession?.user) {
+      if (currentSession) {
+        setSession(currentSession)
         setUser(currentSession.user)
-        const profile = await fetchUserProfile(currentSession.user.id)
-        setUserProfile(profile)
+
+        if (currentSession.user) {
+          const profile = await fetchUserProfile(currentSession.user.id)
+          setUserProfile(profile)
+        }
       } else {
+        setSession(null)
         setUser(null)
         setUserProfile(null)
       }
@@ -128,13 +117,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Sign out function
   const signOut = async () => {
+    setIsLoading(true)
     try {
-      await supabaseBrowser.auth.signOut()
+      const { error } = await supabaseBrowser.auth.signOut()
+      if (error) {
+        console.error("Error signing out:", error)
+      }
+
       setSession(null)
       setUser(null)
       setUserProfile(null)
     } catch (error) {
-      console.error("Error signing out:", error)
+      console.error("Exception signing out:", error)
+    } finally {
+      setIsLoading(false)
     }
   }
 
