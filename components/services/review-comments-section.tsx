@@ -19,6 +19,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu"
+import { useAuth } from "@/contexts/auth-context"
 
 interface ReviewCommentsSectionProps {
   reviewId: number
@@ -36,8 +37,19 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
   reviewId,
   serviceId,
 }: ReviewCommentsSectionProps) {
-  const { comments, commentsLoading, isSubmitting, currentUser, userProfile, fetchComments, submitComment } =
-    useReviews()
+  const {
+    comments = {},
+    commentsLoading = {},
+    isSubmitting = false,
+    currentUser,
+    userProfile,
+    submitComment,
+    fetchComments,
+  } = useReviews()
+
+  // Add direct auth context access as a fallback
+  const { user: authUser } = useAuth()
+
   const [commentContent, setCommentContent] = useState("")
   const [localSubmitting, setLocalSubmitting] = useState(false)
   const [commentsToShow, setCommentsToShow] = useState(INITIAL_COMMENTS_TO_SHOW)
@@ -49,9 +61,26 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
   const commentInputRef = useRef<HTMLTextAreaElement>(null)
   const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
+  // Handle fetch comments safely
+  const handleFetchComments = useCallback(
+    async (reviewId: number) => {
+      try {
+        // Check if fetchComments exists in the context
+        if (typeof fetchComments === "function") {
+          await fetchComments(reviewId)
+        }
+      } catch (error) {
+        console.error("Error fetching comments:", error)
+      }
+    },
+    [fetchComments],
+  )
+
   // Fetch comments for this review
   useEffect(() => {
-    fetchComments(reviewId)
+    if (reviewId) {
+      handleFetchComments(reviewId)
+    }
 
     // Clear any existing timeouts on unmount
     return () => {
@@ -59,13 +88,17 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
         clearTimeout(loadingTimeoutRef.current)
       }
     }
-  }, [reviewId, fetchComments])
+  }, [reviewId, handleFetchComments])
 
   // Handle comment submission
   const handleCommentSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault()
-      if (!commentContent.trim() || !currentUser) return
+
+      // Use either context user or direct auth user
+      const user = currentUser || authUser
+
+      if (!commentContent.trim() || !user) return
 
       setLocalSubmitting(true)
       try {
@@ -78,10 +111,12 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
         setCommentContent("")
         setIsComposerFocused(false)
 
-        const result = await submitComment(formData)
-
-        if (!result.success) {
-          console.error("Error submitting comment:", result.error)
+        // Only call submitComment if it exists
+        if (typeof submitComment === "function") {
+          const result = await submitComment(formData)
+          if (!result?.success) {
+            console.error("Error submitting comment:", result?.error)
+          }
         }
       } catch (error) {
         console.error("Error submitting comment:", error)
@@ -89,7 +124,7 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
         setLocalSubmitting(false)
       }
     },
-    [commentContent, currentUser, reviewId, serviceId, submitComment],
+    [commentContent, currentUser, authUser, reviewId, serviceId, submitComment],
   )
 
   // Load more comments with simulated loading state
@@ -118,23 +153,38 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
     setCommentsToShow(Number.MAX_SAFE_INTEGER) // Show all available comments
   }, [])
 
-  // Get the comments for this review
-  const reviewComments = comments[reviewId] || []
-  const isLoading = commentsLoading[reviewId]
+  // Get the comments for this review safely
+  const reviewComments = useMemo(() => {
+    // Safely access comments for this review, returning empty array if undefined
+    return Array.isArray(comments[reviewId]) ? comments[reviewId] : []
+  }, [comments, reviewId])
+
+  // Safely check loading state
+  const isLoading = Boolean(commentsLoading[reviewId])
+
+  // Get total comments count safely
   const totalComments = reviewComments.length
 
   // Sort comments based on the selected sort option
   const sortedComments = useMemo(() => {
+    if (!reviewComments || !reviewComments.length) return []
+
     return [...reviewComments].sort((a, b) => {
-      if (sortOption === "newest") {
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      } else if (sortOption === "oldest") {
-        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-      } else if (sortOption === "relevant") {
-        // For "relevant", prioritize comments with more likes, fewer dislikes, and more replies (Facebook-like)
-        const aRelevance = (a.likes || 0) * 2 - (a.dislikes || 0) + (a.replies?.length || 0) * 1.5
-        const bRelevance = (b.likes || 0) * 2 - (b.dislikes || 0) + (b.replies?.length || 0) * 1.5
-        return bRelevance - aRelevance
+      if (!a || !b) return 0 // Safety check for invalid comments
+
+      try {
+        if (sortOption === "newest") {
+          return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+        } else if (sortOption === "oldest") {
+          return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
+        } else if (sortOption === "relevant") {
+          // For "relevant", prioritize comments with more likes, fewer dislikes, and more replies (Facebook-like)
+          const aRelevance = (a.likes || 0) * 2 - (a.dislikes || 0) + (a.replies?.length || 0) * 1.5
+          const bRelevance = (b.likes || 0) * 2 - (b.dislikes || 0) + (b.replies?.length || 0) * 1.5
+          return bRelevance - aRelevance
+        }
+      } catch (error) {
+        console.error("Error sorting comments:", error)
       }
       return 0
     })
@@ -142,10 +192,17 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
 
   // Visible comments with pagination
   const visibleComments = useMemo(() => {
-    return hasReachedMax ? sortedComments.slice(0, MAX_TOP_LEVEL_COMMENTS) : sortedComments.slice(0, commentsToShow)
+    if (!sortedComments.length) return []
+
+    try {
+      return hasReachedMax ? sortedComments.slice(0, MAX_TOP_LEVEL_COMMENTS) : sortedComments.slice(0, commentsToShow)
+    } catch (error) {
+      console.error("Error slicing comments:", error)
+      return []
+    }
   }, [sortedComments, commentsToShow, hasReachedMax])
 
-  const remainingComments = totalComments - visibleComments.length
+  const remainingComments = Math.max(0, totalComments - visibleComments.length)
   const hasMoreComments = remainingComments > 0
 
   // Handle scroll to detect when user reaches bottom of scroll area
@@ -153,10 +210,14 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
     (e: React.UIEvent<HTMLDivElement>) => {
       if (isLoadingMore || !hasMoreComments || hasReachedMax) return
 
-      const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
-      // If user is near the bottom (within 150px), load more comments
-      if (scrollTop + clientHeight >= scrollHeight - 150) {
-        loadMoreComments()
+      try {
+        const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
+        // If user is near the bottom (within 150px), load more comments
+        if (scrollTop + clientHeight >= scrollHeight - 150) {
+          loadMoreComments()
+        }
+      } catch (error) {
+        console.error("Error in scroll handler:", error)
       }
     },
     [hasMoreComments, isLoadingMore, loadMoreComments, hasReachedMax],
@@ -177,13 +238,26 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
     setHasReachedMax(false)
   }, [])
 
-  // Get user display name and avatar
-  const userDisplayName =
-    userProfile?.display_name ||
-    currentUser?.user_metadata?.full_name ||
-    currentUser?.user_metadata?.name ||
-    "Anonymous"
-  const userAvatar = userProfile?.avatar_url || currentUser?.user_metadata?.avatar_url || "/placeholder.svg"
+  // Get user display name and avatar safely
+  const user = currentUser || authUser
+
+  const userDisplayName = useMemo(() => {
+    if (!user) return "Anonymous"
+
+    try {
+      return (
+        userProfile?.display_name ||
+        user.user_metadata?.full_name ||
+        user.user_metadata?.name ||
+        (user.email ? user.email.split("@")[0] : "Anonymous")
+      )
+    } catch (error) {
+      console.error("Error getting display name:", error)
+      return "Anonymous"
+    }
+  }, [user, userProfile])
+
+  const userAvatar = userProfile?.avatar_url || user?.user_metadata?.avatar_url || "/placeholder.svg"
 
   return (
     <div className="space-y-2 overflow-visible">
@@ -235,7 +309,7 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
             {visibleComments.length === 0 ? (
               <div className="text-center py-6">
                 <p className="text-sm text-muted-foreground">No comments yet</p>
-                {currentUser && (
+                {user && (
                   <Button variant="link" size="sm" onClick={focusCommentInput}>
                     Be the first to comment
                   </Button>
@@ -243,14 +317,17 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
               </div>
             ) : (
               <>
-                {visibleComments.map((comment) => (
-                  <ReviewComment
-                    key={`comment-${comment?.id}`}
-                    comment={comment}
-                    serviceId={serviceId}
-                    isOptimistic={comment.isOptimistic}
-                  />
-                ))}
+                {visibleComments.map(
+                  (comment) =>
+                    comment && (
+                      <ReviewComment
+                        key={`comment-${comment.id || "unknown"}`}
+                        comment={comment}
+                        serviceId={serviceId}
+                        isOptimistic={Boolean(comment.isOptimistic)}
+                      />
+                    ),
+                )}
 
                 {/* Load more comments UI */}
                 {hasMoreComments && (
@@ -277,7 +354,7 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
           </div>
 
           {/* Sticky comment composer */}
-          {currentUser && (
+          {user && (
             <div
               className={cn(
                 "sticky bottom-0 bg-background pt-2 pb-1 transition-all duration-200",
