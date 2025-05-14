@@ -2,10 +2,21 @@
 
 import Link from "next/link"
 import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 
 import { MegaMenu } from "@/components/mega-menu"
-import { AuthButton, UserMenu } from "@/components/auth/auth-button"
+import { AuthButton } from "@/components/auth/auth-button"
+import { UserAvatar } from "@/components/auth/user-avatar"
 import { supabase } from "@/lib/supabase-client"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Button } from "@/components/ui/button"
 
 // Define the props interface
 interface SiteHeaderProps {
@@ -15,7 +26,9 @@ interface SiteHeaderProps {
 
 export function SiteHeader({ featuredServices = [], featuredChannels = [] }: SiteHeaderProps) {
   const [user, setUser] = useState<any>(null)
+  const [userProfile, setUserProfile] = useState<any>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const router = useRouter()
 
   useEffect(() => {
     // Get the initial user state
@@ -24,7 +37,21 @@ export function SiteHeader({ featuredServices = [], featuredChannels = [] }: Sit
       const {
         data: { session },
       } = await supabase.auth.getSession()
-      setUser(session?.user || null)
+
+      const currentUser = session?.user || null
+      setUser(currentUser)
+
+      if (currentUser) {
+        // Fetch user profile
+        const { data: profile } = await supabase
+          .from("user_profiles")
+          .select("*")
+          .eq("user_id", currentUser.id)
+          .single()
+
+        setUserProfile(profile)
+      }
+
       setIsLoading(false)
     }
 
@@ -33,14 +60,45 @@ export function SiteHeader({ featuredServices = [], featuredChannels = [] }: Sit
     // Subscribe to auth changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      setUser(session?.user || null)
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      const currentUser = session?.user || null
+      setUser(currentUser)
+
+      if (currentUser) {
+        // Fetch user profile
+        const { data: profile } = await supabase
+          .from("user_profiles")
+          .select("*")
+          .eq("user_id", currentUser.id)
+          .single()
+
+        setUserProfile(profile)
+      } else {
+        setUserProfile(null)
+      }
     })
 
     return () => {
       subscription.unsubscribe()
     }
   }, [])
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut()
+    router.refresh()
+  }
+
+  const getUserDisplayName = () => {
+    if (userProfile?.display_name) {
+      return userProfile.display_name
+    }
+
+    if (user?.user_metadata?.full_name) {
+      return user.user_metadata.full_name
+    }
+
+    return user?.email?.split("@")[0] || "User"
+  }
 
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -59,13 +117,33 @@ export function SiteHeader({ featuredServices = [], featuredChannels = [] }: Sit
               // Show skeleton loader while checking auth status
               <div className="h-9 w-16 animate-pulse rounded-md bg-muted"></div>
             ) : user ? (
-              // Show user menu when logged in
-              <UserMenu user={user} />
+              // Show user dropdown when logged in
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" className="relative h-10 w-10 rounded-full p-0">
+                    <UserAvatar user={user} profile={userProfile} />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuLabel>
+                    <div className="flex flex-col space-y-1">
+                      <p className="text-sm font-medium leading-none">{getUserDisplayName()}</p>
+                      <p className="text-xs leading-none text-muted-foreground">{user.email}</p>
+                    </div>
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <Link href="/settings">Settings</Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={handleSignOut}>Log out</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             ) : (
               // Show login/signup buttons when not logged in
               <>
                 <AuthButton />
-                <AuthButton defaultTab="signup" />
+                <AuthButton defaultTab="signup" buttonText="Sign up" />
               </>
             )}
           </div>

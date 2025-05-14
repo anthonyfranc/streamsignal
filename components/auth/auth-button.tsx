@@ -18,7 +18,12 @@ import { Label } from "@/components/ui/label"
 import { useRouter } from "next/navigation"
 import { supabase } from "@/lib/supabase-client"
 
-export function AuthButton({ defaultTab = "signin" }: { defaultTab?: "signin" | "signup" }) {
+interface AuthButtonProps {
+  defaultTab?: "signin" | "signup"
+  buttonText?: string
+}
+
+export function AuthButton({ defaultTab = "signin", buttonText }: AuthButtonProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -80,11 +85,15 @@ export function AuthButton({ defaultTab = "signin" }: { defaultTab?: "signin" | 
     router.refresh()
   }
 
+  // Default button text based on the tab if not provided
+  const defaultButtonText = defaultTab === "signin" ? "Log in" : "Sign up"
+  const displayButtonText = buttonText || defaultButtonText
+
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="hidden md:flex">
-          Log in
+        <Button variant={defaultTab === "signup" ? "default" : "outline"} size="sm" className="hidden md:flex">
+          {displayButtonText}
         </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-[425px]">
@@ -139,28 +148,5 @@ export function AuthButton({ defaultTab = "signin" }: { defaultTab?: "signin" | 
         </Tabs>
       </DialogContent>
     </Dialog>
-  )
-}
-
-export function UserMenu({ user }: { user: any }) {
-  const router = useRouter()
-  const [isMenuOpen, setIsMenuOpen] = useState(false)
-
-  const handleSignOut = async () => {
-    await supabase.auth.signOut()
-    router.refresh()
-  }
-
-  return (
-    <div className="relative flex items-center gap-2">
-      <div className="flex items-center gap-2">
-        <span className="hidden text-sm md:inline-block">
-          {user.user_metadata?.full_name || user.email?.split("@")[0]}
-        </span>
-        <Button variant="outline" size="sm" onClick={handleSignOut}>
-          Sign Out
-        </Button>
-      </div>
-    </div>
   )
 }
