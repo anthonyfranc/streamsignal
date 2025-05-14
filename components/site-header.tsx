@@ -46,7 +46,7 @@ export function SiteHeader({ featuredServices = [], featuredChannels = [] }: Sit
         const { data: profile } = await supabase
           .from("user_profiles")
           .select("*")
-          .eq("user_id", currentUser.id)
+          .eq("id", currentUser.id)
           .single()
 
         setUserProfile(profile)
@@ -69,7 +69,7 @@ export function SiteHeader({ featuredServices = [], featuredChannels = [] }: Sit
         const { data: profile } = await supabase
           .from("user_profiles")
           .select("*")
-          .eq("user_id", currentUser.id)
+          .eq("id", currentUser.id)
           .single()
 
         setUserProfile(profile)
@@ -100,6 +100,23 @@ export function SiteHeader({ featuredServices = [], featuredChannels = [] }: Sit
     return user?.email?.split("@")[0] || "User"
   }
 
+  // Function to truncate email if too long
+  const truncateEmail = (email: string) => {
+    if (!email) return ""
+
+    const [username, domain] = email.split("@")
+
+    if (username.length > 10) {
+      return `${username.substring(0, 10)}...@${domain}`
+    }
+
+    if (email.length > 25) {
+      return `${email.substring(0, 22)}...`
+    }
+
+    return email
+  }
+
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container flex h-16 items-center">
@@ -128,7 +145,9 @@ export function SiteHeader({ featuredServices = [], featuredChannels = [] }: Sit
                   <DropdownMenuLabel>
                     <div className="flex flex-col space-y-1">
                       <p className="text-sm font-medium leading-none">{getUserDisplayName()}</p>
-                      <p className="text-xs leading-none text-muted-foreground">{user.email}</p>
+                      <p className="text-xs leading-none text-muted-foreground truncate" title={user.email}>
+                        {truncateEmail(user.email)}
+                      </p>
                     </div>
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />

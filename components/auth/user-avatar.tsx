@@ -1,5 +1,4 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { getUserColor } from "@/lib/user-display-utils"
 
 interface UserAvatarProps {
   user: any
@@ -17,7 +16,6 @@ export function UserAvatar({ user, profile, size = "md" }: UserAvatarProps) {
   }
 
   const avatarClass = sizeClasses[size]
-  const userColor = getUserColor(user.id)
 
   // Get initials from name or email
   const getName = () => {
@@ -43,9 +41,7 @@ export function UserAvatar({ user, profile, size = "md" }: UserAvatarProps) {
   return (
     <Avatar className={avatarClass}>
       <AvatarImage src={profile?.avatar_url || user.user_metadata?.avatar_url} alt={name} />
-      <AvatarFallback style={{ backgroundColor: userColor }} className="text-white">
-        {initials}
-      </AvatarFallback>
+      <AvatarFallback className="bg-gray-400 text-white">{initials}</AvatarFallback>
     </Avatar>
   )
 }
