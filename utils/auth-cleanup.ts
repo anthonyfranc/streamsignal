@@ -17,7 +17,7 @@ export function useAuthCleanup() {
 
       if (hasDefaultToken) {
         // If we have the default token, remove any other tokens
-        const keysToRemove = ["streamsignal_auth_token", "supabase.auth.token"]
+        const keysToRemove = ["none"]
 
         keysToRemove.forEach((key) => {
           try {
