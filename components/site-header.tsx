@@ -51,11 +51,11 @@ export function SiteHeader({ featuredServices = [], featuredChannels = [] }: Sit
     const [username, domain] = email.split("@")
 
     if (username.length > 10) {
-      return `${username.substring(0, 20)}...@${domain}`
+      return `${username.substring(0, 10)}...@${domain}`
     }
 
-    if (email.length > 30) {
-      return `${email.substring(0, 25)}...`
+    if (email.length > 25) {
+      return `${email.substring(0, 22)}...`
     }
 
     return email
