@@ -1,737 +1,610 @@
 "use client"
 
 import type React from "react"
-import { createContext, useContext, useEffect, useCallback } from "react"
-import { useAuthUser } from "@/hooks/use-auth-user"
-import { useReviewsData } from "@/hooks/use-reviews-data"
+import { createContext, useContext, useState, useEffect, useCallback } from "react"
+import { useAuth } from "@/contexts/auth-context"
 import { reviewsService } from "@/services/reviews-service"
-import {
-  processSafeReview,
-  processSafeComment,
-  getDisplayNameFromData,
-  buildCommentTree,
-  updateCommentTreeWithReply,
-  replaceCommentInTree,
-  removeCommentFromTree,
-  updateCommentReactionInTree,
-} from "@/utils/review-utils"
-import { safeString, safeNumber, safeGet } from "@/lib/data-safety-utils"
 import type { ServiceReview, ReviewComment } from "@/types/reviews"
-import { supabase } from "@/lib/supabase-client"
 
-type ReviewsContextType = {
+interface ReviewsContextType {
   reviews: ServiceReview[]
   comments: Record<number, ReviewComment[]>
-  userReactions: Record<string, string>
+  replies: Record<number, ReviewComment[]>
   isInitialLoading: boolean
   isSubmitting: boolean
-  commentsLoading: Record<number, boolean>
-  currentUser: any | null
-  userProfile: any | null
+  currentUser: any
+  userProfile: any
+  userReactions: Record<string, string>
   fetchReviews: (serviceId: number) => Promise<void>
-  fetchComments: (reviewId: number) => Promise<ReviewComment[]>
   submitReview: (formData: FormData) => Promise<{ success: boolean; error?: string }>
-  submitComment: (formData: FormData) => Promise<{ success: boolean; error?: string }>
-  submitReply: (formData: FormData) => Promise<{ success: boolean; error?: string }>
+  submitComment: (
+    reviewId: number,
+    content: string,
+    parentCommentId?: number,
+  ) => Promise<{
+    success: boolean
+    error?: string
+    comment?: ReviewComment
+  }>
   reactToReview: (reviewId: number, reactionType: string) => Promise<void>
   reactToComment: (commentId: number, reactionType: string) => Promise<void>
 }
 
-const ReviewsContext = createContext<ReviewsContextType | undefined>(undefined)
+const ReviewsContext = createContext<ReviewsContextType>({
+  reviews: [],
+  comments: {},
+  replies: {},
+  isInitialLoading: true,
+  isSubmitting: false,
+  currentUser: null,
+  userProfile: null,
+  userReactions: {},
+  fetchReviews: async () => {},
+  submitReview: async () => ({ success: false }),
+  submitComment: async () => ({ success: false }),
+  reactToReview: async () => {},
+  reactToComment: async () => {},
+})
+
+export const useReviews = () => useContext(ReviewsContext)
 
 export function ReviewsProvider({ children }: { children: React.ReactNode }) {
-  // Use custom hooks for state management
-  const { currentUser, userProfile } = useAuthUser()
-  const {
-    reviews,
-    setReviews,
-    comments,
-    setComments,
-    userReactions,
-    setUserReactions,
-    isInitialLoading,
-    setIsInitialLoading,
-    isSubmitting,
-    setIsSubmitting,
-    commentsLoading,
-    setCommentsLoading,
-    fetchedReviewsRef,
-    fetchedCommentsRef,
-    resetFetchedState,
-  } = useReviewsData()
+  const { user, userProfile, isLoading: isAuthLoading } = useAuth()
+  const [reviews, setReviews] = useState<ServiceReview[]>([])
+  const [comments, setComments] = useState<Record<number, ReviewComment[]>>({})
+  const [replies, setReplies] = useState<Record<number, ReviewComment[]>>({})
+  const [isInitialLoading, setIsInitialLoading] = useState(true)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [userReactions, setUserReactions] = useState<Record<string, string>>({})
+  const [authInitialized, setAuthInitialized] = useState(false)
 
-  // Reset fetched state when current user changes
+  // Wait for auth to be initialized before proceeding
   useEffect(() => {
-    resetFetchedState()
-  }, [currentUser, resetFetchedState])
+    if (!isAuthLoading && !authInitialized) {
+      setAuthInitialized(true)
+    }
+  }, [isAuthLoading, authInitialized])
 
   // Fetch reviews for a service
   const fetchReviews = useCallback(
     async (serviceId: number) => {
-      // Skip if we've already fetched this service's reviews
-      if (fetchedReviewsRef.current[serviceId]) {
-        return
-      }
-
-      // Only set loading state for initial fetch
-      if (!fetchedReviewsRef.current[serviceId]) {
-        setIsInitialLoading(true)
-      }
+      if (!serviceId) return
 
       try {
-        const { data, error } = await reviewsService.fetchReviews(serviceId)
+        setIsInitialLoading(true)
+        const { data: reviewsData, error: reviewsError } = await reviewsService.fetchReviews(serviceId)
 
-        if (error) {
-          console.error("Error fetching reviews:", error)
-          setReviews([])
-        } else {
-          // Process reviews to ensure all required fields exist
-          const safeReviews = (data || []).map((review) => processSafeReview(review))
-          setReviews(safeReviews as ServiceReview[])
+        if (reviewsError) {
+          console.error("Error fetching reviews:", reviewsError)
+          return
+        }
 
-          // If user is logged in, fetch their reactions to these reviews
-          if (currentUser) {
-            const reviewIds = safeReviews.map((review) => review.id) || []
+        setReviews(reviewsData || [])
 
-            if (reviewIds.length > 0) {
-              try {
-                const { data: reactions, error: reactionsError } = await reviewsService.fetchReviewReactions(
-                  currentUser.id,
-                  reviewIds,
-                )
+        // Fetch user reactions if user is logged in
+        if (user) {
+          const reviewIds = (reviewsData || []).map((review) => review.id).filter(Boolean)
 
-                if (!reactionsError && reactions) {
-                  const newUserReactions: Record<string, string> = {}
-                  reactions.forEach((reaction) => {
-                    if (reaction && reaction.review_id) {
-                      newUserReactions[`review_${reaction.review_id}`] = safeString(reaction.reaction_type, "like")
-                    }
-                  })
-                  setUserReactions((prev) => ({
-                    ...prev,
-                    ...newUserReactions,
-                  }))
-                } else if (reactionsError) {
-                  console.error("Error fetching review reactions:", reactionsError)
-                }
-              } catch (error) {
-                console.error("Error processing review reactions:", error)
-              }
+          if (reviewIds.length > 0) {
+            const { data: reactionsData, error: reactionsError } = await reviewsService.fetchReviewReactions(
+              user.id,
+              reviewIds as number[],
+            )
+
+            if (!reactionsError && reactionsData) {
+              const reactionsMap: Record<string, string> = {}
+              reactionsData.forEach((reaction) => {
+                reactionsMap[`review_${reaction.review_id}`] = reaction.reaction_type
+              })
+              setUserReactions(reactionsMap)
             }
           }
-
-          // Mark this service's reviews as fetched
-          fetchedReviewsRef.current[serviceId] = true
         }
       } catch (error) {
-        console.error("Error fetching reviews:", error)
-        setReviews([])
+        console.error("Exception fetching reviews:", error)
       } finally {
         setIsInitialLoading(false)
       }
     },
-    [currentUser, setReviews, setUserReactions, setIsInitialLoading, fetchedReviewsRef],
-  )
-
-  // Fetch comments for a review
-  const fetchComments = useCallback(
-    async (reviewId: number): Promise<ReviewComment[]> => {
-      // Skip if we've already fetched comments for this review
-      if (fetchedCommentsRef.current[reviewId]) {
-        return comments[reviewId] || []
-      }
-
-      // Only set loading state for initial fetch
-      if (!fetchedCommentsRef.current[reviewId]) {
-        setCommentsLoading((prev) => ({ ...prev, [reviewId]: true }))
-      }
-
-      try {
-        // Get all top-level comments for this review
-        const { data: topLevelComments, error: commentsError } = await reviewsService.fetchTopLevelComments(reviewId)
-
-        if (commentsError) {
-          console.error("Error fetching comments:", commentsError)
-          return []
-        }
-
-        // Get all replies (comments with parent_comment_id)
-        const { data: allReplies, error: repliesError } = await reviewsService.fetchAllReplies()
-
-        if (repliesError) {
-          console.error("Error fetching replies:", repliesError)
-          return topLevelComments || []
-        }
-
-        // Get user reactions if logged in
-        const userReactionsMap: Record<string, string> = {}
-
-        if (currentUser) {
-          try {
-            const { data: reactions, error: reactionsError } = await reviewsService.fetchCommentReactions(
-              currentUser.id,
-            )
-
-            if (!reactionsError && reactions) {
-              reactions.forEach((reaction) => {
-                if (reaction && reaction.comment_id) {
-                  userReactionsMap[`comment_${reaction.comment_id}`] = safeString(reaction.reaction_type, "like")
-                }
-              })
-
-              // Update user reactions state
-              setUserReactions((prev) => ({
-                ...prev,
-                ...userReactionsMap,
-              }))
-            }
-          } catch (error) {
-            console.error("Error fetching comment reactions:", error)
-          }
-        }
-
-        // Build comment tree
-        const processedTopComments = buildCommentTree(topLevelComments || [], allReplies || [], userReactionsMap)
-
-        // Update comments state
-        setComments((prev) => ({
-          ...prev,
-          [reviewId]: processedTopComments,
-        }))
-
-        // Mark this review's comments as fetched
-        fetchedCommentsRef.current[reviewId] = true
-
-        return processedTopComments
-      } catch (error) {
-        console.error("Error getting review comments:", error)
-        return []
-      } finally {
-        setCommentsLoading((prev) => ({ ...prev, [reviewId]: false }))
-      }
-    },
-    [currentUser, comments, setComments, setUserReactions, setCommentsLoading, fetchedCommentsRef],
+    [user],
   )
 
   // Submit a new review
   const submitReview = useCallback(
     async (formData: FormData) => {
-      if (!currentUser) {
+      if (!user) {
         return { success: false, error: "You must be logged in to submit a review" }
       }
 
-      const serviceId = safeNumber(formData.get("serviceId"), 0)
-      const rating = safeNumber(formData.get("rating"), 0)
-      const title = safeString(formData.get("title"), "")
-      const content = safeString(formData.get("content"), "")
-      const interfaceRating = safeNumber(formData.get("interfaceRating"), 0)
-      const reliabilityRating = safeNumber(formData.get("reliabilityRating"), 0)
-      const contentRating = safeNumber(formData.get("contentRating"), 0)
-      const valueRating = safeNumber(formData.get("valueRating"), 0)
-
-      if (serviceId === 0 || rating === 0 || !title.trim() || !content.trim()) {
-        return { success: false, error: "Missing required fields" }
-      }
-
-      setIsSubmitting(true)
-
       try {
-        // Get display name from user_profiles or metadata
-        const authorName = getDisplayNameFromData(currentUser, userProfile)
+        setIsSubmitting(true)
 
-        // Get avatar URL from user_profiles or metadata
-        const authorAvatar =
-          safeGet(userProfile, "avatar_url", null) || safeGet(currentUser, "user_metadata.avatar_url", null)
+        const serviceId = Number(formData.get("serviceId"))
+        const rating = Number(formData.get("rating"))
+        const title = formData.get("title") as string
+        const content = formData.get("content") as string
+        const interfaceRating = Number(formData.get("interfaceRating") || 0)
+        const reliabilityRating = Number(formData.get("reliabilityRating") || 0)
+        const contentRating = Number(formData.get("contentRating") || 0)
+        const valueRating = Number(formData.get("valueRating") || 0)
 
-        // Create optimistic review
-        const optimisticReviewId = `temp-${Date.now()}`
-        const optimisticReview: ServiceReview = {
-          id: optimisticReviewId,
+        if (!rating || !title.trim() || !content.trim()) {
+          return { success: false, error: "Rating, title, and content are required" }
+        }
+
+        // Create review data
+        const reviewData = {
           service_id: serviceId,
-          user_id: currentUser.id,
-          author_name: authorName,
-          author_avatar: authorAvatar || "/placeholder.svg",
+          user_id: user.id,
+          author_name: userProfile?.display_name || user.email?.split("@")[0] || "Anonymous",
+          author_avatar: userProfile?.avatar_url || user.user_metadata?.avatar_url || null,
           rating,
-          title,
-          content,
-          interface_rating: interfaceRating > 0 ? interfaceRating : null,
-          reliability_rating: reliabilityRating > 0 ? reliabilityRating : null,
-          content_rating: contentRating > 0 ? contentRating : null,
-          value_rating: valueRating > 0 ? valueRating : null,
+          title: title.trim(),
+          content: content.trim(),
+          interface_rating: interfaceRating || null,
+          reliability_rating: reliabilityRating || null,
+          content_rating: contentRating || null,
+          value_rating: valueRating || null,
+        }
+
+        // Add optimistic review
+        const optimisticReview = {
+          ...reviewData,
+          id: Date.now(), // Temporary ID
+          created_at: new Date().toISOString(),
           likes: 0,
           dislikes: 0,
-          created_at: new Date().toISOString(),
           isOptimistic: true,
         }
 
-        // Update UI optimistically
         setReviews((prev) => [optimisticReview, ...prev])
 
-        const { data, error } = await reviewsService.submitReview({
-          service_id: serviceId,
-          user_id: currentUser.id,
-          author_name: authorName,
-          author_avatar: authorAvatar,
-          rating,
-          title,
-          content,
-          interface_rating: interfaceRating > 0 ? interfaceRating : null,
-          reliability_rating: reliabilityRating > 0 ? reliabilityRating : null,
-          content_rating: contentRating > 0 ? contentRating : null,
-          value_rating: valueRating > 0 ? valueRating : null,
-        })
+        // Submit to server
+        const { data, error } = await reviewsService.submitReview(reviewData)
 
         if (error) {
-          console.error("Error submitting review:", error)
-
           // Remove optimistic review on error
-          setReviews((prev) => prev.filter((r) => r.id !== optimisticReviewId))
-
+          setReviews((prev) => prev.filter((review) => review.id !== optimisticReview.id))
           return { success: false, error: error.message }
         }
 
         // Replace optimistic review with real one
-        if (data && data[0]) {
-          const safeReview = processSafeReview(data[0])
-          setReviews((prev) => prev.map((r) => (r.id === optimisticReviewId ? (safeReview as ServiceReview) : r)))
-        }
+        setReviews((prev) =>
+          prev.map((review) => (review.id === optimisticReview.id ? { ...data[0], isOptimistic: false } : review)),
+        )
 
         return { success: true }
       } catch (error) {
-        console.error("Error submitting review:", error)
-        return { success: false, error: "Failed to submit review" }
+        console.error("Exception submitting review:", error)
+        return { success: false, error: "An unexpected error occurred" }
       } finally {
         setIsSubmitting(false)
       }
     },
-    [currentUser, userProfile, setReviews, setIsSubmitting],
+    [user, userProfile],
   )
 
-  // Submit a comment on a review
+  // Submit a new comment
   const submitComment = useCallback(
-    async (formData: FormData) => {
-      if (!currentUser) {
-        return { success: false, error: "You must be logged in to comment" }
+    async (reviewId: number, content: string, parentCommentId?: number) => {
+      if (!user) {
+        return { success: false, error: "You must be logged in to submit a comment" }
       }
 
-      const reviewId = safeNumber(formData.get("reviewId"), 0)
-      const content = safeString(formData.get("content"), "")
-
-      if (reviewId === 0 || !content.trim()) {
-        return { success: false, error: "Missing required fields" }
+      if (!content.trim()) {
+        return { success: false, error: "Comment content is required" }
       }
-
-      setIsSubmitting(true)
 
       try {
-        // Get display name from user_profiles or metadata
-        const authorName = getDisplayNameFromData(currentUser, userProfile)
+        setIsSubmitting(true)
 
-        // Get avatar URL from user_profiles or metadata
-        const authorAvatar =
-          safeGet(userProfile, "avatar_url", null) || safeGet(currentUser, "user_metadata.avatar_url", null)
-
-        // Create optimistic comment
-        const optimisticCommentId = `temp-${Date.now()}`
-        const optimisticComment: ReviewComment = {
-          id: optimisticCommentId,
-          review_id: reviewId,
-          parent_comment_id: null,
-          user_id: currentUser.id,
-          author_name: authorName,
-          author_avatar: authorAvatar || "/placeholder.svg",
-          content,
-          likes: 0,
-          dislikes: 0,
-          created_at: new Date().toISOString(),
-          nesting_level: 1,
-          replies: [],
-          user_reaction: null,
-          isOptimistic: true, // Flag to identify optimistic updates
+        // Create comment data
+        const commentData = {
+          review_id: parentCommentId ? null : reviewId,
+          parent_comment_id: parentCommentId || null,
+          user_id: user.id,
+          author_name: userProfile?.display_name || user.email?.split("@")[0] || "Anonymous",
+          author_avatar: userProfile?.avatar_url || user.user_metadata?.avatar_url || null,
+          content: content.trim(),
         }
 
-        // Update UI optimistically
-        setComments((prev) => {
-          const existingComments = prev[reviewId] || []
-          return {
-            ...prev,
-            [reviewId]: [...existingComments, optimisticComment],
-          }
-        })
+        // Add optimistic comment
+        const optimisticComment = {
+          ...commentData,
+          id: Date.now(), // Temporary ID
+          created_at: new Date().toISOString(),
+          likes: 0,
+          dislikes: 0,
+          replies: [],
+          isOptimistic: true,
+        }
 
-        // Perform actual API call
-        const { data, error } = await reviewsService.submitComment({
-          review_id: reviewId,
-          parent_comment_id: null,
-          user_id: currentUser.id,
-          author_name: authorName,
-          author_avatar: authorAvatar,
-          content,
-          nesting_level: 1,
-        })
+        if (parentCommentId) {
+          // Add as a reply
+          setReplies((prev) => ({
+            ...prev,
+            [parentCommentId]: [...(prev[parentCommentId] || []), optimisticComment],
+          }))
+        } else {
+          // Add as a top-level comment
+          setComments((prev) => ({
+            ...prev,
+            [reviewId]: [...(prev[reviewId] || []), optimisticComment],
+          }))
+        }
+
+        // Submit to server
+        const { data, error } = await reviewsService.submitComment(commentData)
 
         if (error) {
-          console.error("Error submitting comment:", error)
-
-          // Revert optimistic update on error
-          setComments((prev) => {
-            const existingComments = prev[reviewId] || []
-            return {
+          // Remove optimistic comment on error
+          if (parentCommentId) {
+            setReplies((prev) => ({
               ...prev,
-              [reviewId]: existingComments.filter((c) => c.id !== optimisticCommentId),
-            }
-          })
-
+              [parentCommentId]: (prev[parentCommentId] || []).filter((comment) => comment.id !== optimisticComment.id),
+            }))
+          } else {
+            setComments((prev) => ({
+              ...prev,
+              [reviewId]: (prev[reviewId] || []).filter((comment) => comment.id !== optimisticComment.id),
+            }))
+          }
           return { success: false, error: error.message }
         }
 
         // Replace optimistic comment with real one
-        if (data && data[0]) {
-          const newComment = processSafeComment(data[0], null) as ReviewComment
+        const realComment = { ...data[0], replies: [], isOptimistic: false }
 
-          setComments((prev) => {
-            const existingComments = prev[reviewId] || []
-            return {
-              ...prev,
-              [reviewId]: existingComments.map((c) => (c.id === optimisticCommentId ? newComment : c)),
-            }
-          })
+        if (parentCommentId) {
+          setReplies((prev) => ({
+            ...prev,
+            [parentCommentId]: (prev[parentCommentId] || []).map((comment) =>
+              comment.id === optimisticComment.id ? realComment : comment,
+            ),
+          }))
+        } else {
+          setComments((prev) => ({
+            ...prev,
+            [reviewId]: (prev[reviewId] || []).map((comment) =>
+              comment.id === optimisticComment.id ? realComment : comment,
+            ),
+          }))
         }
 
-        return { success: true }
+        return { success: true, comment: realComment }
       } catch (error) {
-        console.error("Error submitting comment:", error)
-        return { success: false, error: "Failed to submit comment" }
+        console.error("Exception submitting comment:", error)
+        return { success: false, error: "An unexpected error occurred" }
       } finally {
         setIsSubmitting(false)
       }
     },
-    [currentUser, userProfile, setComments, setIsSubmitting],
+    [user, userProfile],
   )
 
-  // Submit a reply to a comment
-  const submitReply = useCallback(
-    async (formData: FormData) => {
-      if (!currentUser) {
-        return { success: false, error: "You must be logged in to reply" }
-      }
-
-      const parentCommentId = safeNumber(formData.get("parentCommentId"), 0)
-      const content = safeString(formData.get("content"), "")
-      const nestingLevel = safeNumber(formData.get("nestingLevel"), 1) + 1
-      const reviewId = safeNumber(formData.get("reviewId"), 0)
-
-      if (parentCommentId === 0 || !content.trim()) {
-        return { success: false, error: "Missing required fields" }
-      }
-
-      // Check if we've reached maximum nesting level
-      if (nestingLevel > 3) {
-        return { success: false, error: "Maximum reply depth reached" }
-      }
-
-      setIsSubmitting(true)
-
-      try {
-        // Get display name from user_profiles or metadata
-        const authorName = getDisplayNameFromData(currentUser, userProfile)
-
-        // Get avatar URL from user_profiles or metadata
-        const authorAvatar =
-          safeGet(userProfile, "avatar_url", null) || safeGet(currentUser, "user_metadata.avatar_url", null)
-
-        // Create optimistic reply
-        const optimisticReplyId = `temp-${Date.now()}`
-        const optimisticReply: ReviewComment = {
-          id: optimisticReplyId,
-          review_id: null,
-          parent_comment_id: parentCommentId,
-          user_id: currentUser.id,
-          author_name: authorName,
-          author_avatar: authorAvatar || "/placeholder.svg",
-          content,
-          likes: 0,
-          dislikes: 0,
-          created_at: new Date().toISOString(),
-          nesting_level: nestingLevel,
-          replies: [],
-          user_reaction: null,
-          isOptimistic: true, // Flag to identify optimistic updates
-        }
-
-        // Update UI optimistically
-        setComments((prev) => {
-          // If we know the reviewId
-          if (reviewId) {
-            return {
-              ...prev,
-              [reviewId]: updateCommentTreeWithReply(prev[reviewId] || [], parentCommentId, optimisticReply),
-            }
-          }
-
-          // Find the review ID for this comment if not provided
-          for (const [revId, commentsList] of Object.entries(prev)) {
-            let found = false
-            const findParentComment = (commentList: ReviewComment[]): boolean => {
-              for (const comment of commentList) {
-                if (comment.id === parentCommentId) {
-                  found = true
-                  return true
-                }
-                if (comment.replies && comment.replies.length > 0) {
-                  if (findParentComment(comment.replies)) {
-                    return true
-                  }
-                }
-              }
-              return false
-            }
-
-            if (findParentComment(commentsList)) {
-              return {
-                ...prev,
-                [revId]: updateCommentTreeWithReply(prev[revId] || [], parentCommentId, optimisticReply),
-              }
-            }
-          }
-
-          return prev
-        })
-
-        // Perform actual API call
-        const { data, error } = await reviewsService.submitComment({
-          review_id: null,
-          parent_comment_id: parentCommentId,
-          user_id: currentUser.id,
-          author_name: authorName,
-          author_avatar: authorAvatar,
-          content,
-          nesting_level: nestingLevel,
-        })
-
-        if (error) {
-          console.error("Error submitting reply:", error)
-
-          // Revert optimistic update on error
-          setComments((prev) => {
-            const updatedComments = { ...prev }
-            for (const reviewId in updatedComments) {
-              updatedComments[reviewId] = removeCommentFromTree(updatedComments[reviewId], optimisticReplyId)
-            }
-            return updatedComments
-          })
-
-          return { success: false, error: error.message }
-        }
-
-        // Replace optimistic reply with real one
-        if (data && data[0]) {
-          const newReply = processSafeComment(data[0], null) as ReviewComment
-
-          setComments((prev) => {
-            const updatedComments = { ...prev }
-            for (const reviewId in updatedComments) {
-              updatedComments[reviewId] = replaceCommentInTree(updatedComments[reviewId], optimisticReplyId, newReply)
-            }
-            return updatedComments
-          })
-        }
-
-        return { success: true }
-      } catch (error) {
-        console.error("Error submitting reply:", error)
-        return { success: false, error: "Failed to submit reply" }
-      } finally {
-        setIsSubmitting(false)
-      }
-    },
-    [currentUser, userProfile, setComments, setIsSubmitting],
-  )
-
-  // React to a review (like/dislike)
+  // React to a review
   const reactToReview = useCallback(
     async (reviewId: number, reactionType: string) => {
-      if (!currentUser) return
+      if (!user) return
 
       try {
-        // Optimistic update
-        const currentReaction = userReactions[`review_${reviewId}`]
-        const isRemovingReaction = currentReaction === reactionType
+        // Check if user already reacted with this type
+        const existingReaction = userReactions[`review_${reviewId}`]
 
-        // Update UI immediately
-        setUserReactions((prev) => ({
-          ...prev,
-          [`review_${reviewId}`]: isRemovingReaction ? null : reactionType,
-        }))
+        // Optimistically update UI
+        if (existingReaction === reactionType) {
+          // Remove reaction if clicking the same one
+          setUserReactions((prev) => {
+            const newReactions = { ...prev }
+            delete newReactions[`review_${reviewId}`]
+            return newReactions
+          })
 
-        setReviews((prev) =>
-          prev.map((review) => {
-            if (review.id === reviewId) {
-              let likes = safeNumber(review.likes, 0)
-              let dislikes = safeNumber(review.dislikes, 0)
-
-              // Remove previous reaction if exists
-              if (currentReaction === "like") likes = Math.max(0, likes - 1)
-              if (currentReaction === "dislike") dislikes = Math.max(0, dislikes - 1)
-
-              // Add new reaction if not removing
-              if (!isRemovingReaction) {
-                if (reactionType === "like") likes++
-                if (reactionType === "dislike") dislikes++
+          // Update review counts
+          setReviews((prev) =>
+            prev.map((review) => {
+              if (review.id === reviewId) {
+                return {
+                  ...review,
+                  likes: reactionType === "like" ? Math.max(0, review.likes - 1) : review.likes,
+                  dislikes: reactionType === "dislike" ? Math.max(0, review.dislikes - 1) : review.dislikes,
+                }
               }
+              return review
+            }),
+          )
 
-              return {
-                ...review,
-                likes,
-                dislikes,
-              }
-            }
-            return review
-          }),
-        )
-
-        // Perform actual API call
-        if (isRemovingReaction) {
-          // Remove reaction
-          await reviewsService.removeReviewReaction(reviewId, currentUser.id)
+          // Remove reaction in database
+          await reviewsService.removeReviewReaction(reviewId, user.id)
         } else {
-          // Add or update reaction
-          await reviewsService.upsertReviewReaction(reviewId, currentUser.id, reactionType)
-        }
+          // Add or change reaction
+          setUserReactions((prev) => ({
+            ...prev,
+            [`review_${reviewId}`]: reactionType,
+          }))
 
-        // Update review likes/dislikes count in database
-        const { data: review } = await supabase
-          .from("service_reviews")
-          .select("likes, dislikes")
-          .eq("id", reviewId)
-          .single()
+          // Update review counts
+          setReviews((prev) =>
+            prev.map((review) => {
+              if (review.id === reviewId) {
+                let newLikes = review.likes
+                let newDislikes = review.dislikes
 
-        if (review) {
-          let likes = safeNumber(review.likes, 0)
-          let dislikes = safeNumber(review.dislikes, 0)
+                // Remove previous reaction count if any
+                if (existingReaction === "like") newLikes = Math.max(0, newLikes - 1)
+                if (existingReaction === "dislike") newDislikes = Math.max(0, newDislikes - 1)
 
-          // Remove previous reaction if exists
-          if (currentReaction === "like") likes = Math.max(0, likes - 1)
-          if (currentReaction === "dislike") dislikes = Math.max(0, dislikes - 1)
+                // Add new reaction count
+                if (reactionType === "like") newLikes++
+                if (reactionType === "dislike") newDislikes++
 
-          // Add new reaction if not removing
-          if (!isRemovingReaction) {
-            if (reactionType === "like") likes++
-            if (reactionType === "dislike") dislikes++
-          }
+                return {
+                  ...review,
+                  likes: newLikes,
+                  dislikes: newDislikes,
+                }
+              }
+              return review
+            }),
+          )
 
-          await reviewsService.updateReviewReactionCounts(reviewId, likes, dislikes)
+          // Update reaction in database
+          await reviewsService.upsertReviewReaction(reviewId, user.id, reactionType)
         }
       } catch (error) {
         console.error("Error reacting to review:", error)
-        // Revert optimistic update on error
-        const serviceId = reviews.find((r) => r.id === reviewId)?.service_id
-        if (serviceId) {
-          // Reset the fetched flag so we can fetch fresh data
-          fetchedReviewsRef.current[serviceId] = false
-          await fetchReviews(serviceId)
-        }
       }
     },
-    [currentUser, userReactions, reviews, setUserReactions, setReviews, fetchReviews, fetchedReviewsRef],
+    [user, userReactions],
   )
 
-  // React to a comment (like/dislike)
+  // React to a comment
   const reactToComment = useCallback(
     async (commentId: number, reactionType: string) => {
-      if (!currentUser) return
+      if (!user) return
 
       try {
-        // Optimistic update
-        const currentReaction = userReactions[`comment_${commentId}`]
-        const isRemovingReaction = currentReaction === reactionType
-        const newReaction = isRemovingReaction ? null : reactionType
+        // Check if user already reacted with this type
+        const existingReaction = userReactions[`comment_${commentId}`]
 
-        // Update UI immediately
-        setUserReactions((prev) => ({
-          ...prev,
-          [`comment_${commentId}`]: newReaction,
-        }))
+        // Optimistically update UI
+        if (existingReaction === reactionType) {
+          // Remove reaction if clicking the same one
+          setUserReactions((prev) => {
+            const newReactions = { ...prev }
+            delete newReactions[`comment_${commentId}`]
+            return newReactions
+          })
 
-        // Update comments state
-        setComments((prev) => {
-          const updatedComments = { ...prev }
-          for (const reviewId in updatedComments) {
-            updatedComments[reviewId] = updateCommentReactionInTree(
-              updatedComments[reviewId],
-              commentId,
-              currentReaction,
-              newReaction,
-            )
-          }
-          return updatedComments
-        })
+          // Update comment counts in both comments and replies
+          setComments((prev) => {
+            const newComments = { ...prev }
+            Object.keys(newComments).forEach((reviewId) => {
+              newComments[Number(reviewId)] = newComments[Number(reviewId)].map((comment) => {
+                if (comment.id === commentId) {
+                  return {
+                    ...comment,
+                    likes: reactionType === "like" ? Math.max(0, comment.likes - 1) : comment.likes,
+                    dislikes: reactionType === "dislike" ? Math.max(0, comment.dislikes - 1) : comment.dislikes,
+                  }
+                }
+                return comment
+              })
+            })
+            return newComments
+          })
 
-        // Perform actual API call
-        if (isRemovingReaction) {
-          // Remove reaction
-          await reviewsService.removeCommentReaction(commentId, currentUser.id)
+          setReplies((prev) => {
+            const newReplies = { ...prev }
+            Object.keys(newReplies).forEach((parentId) => {
+              newReplies[Number(parentId)] = newReplies[Number(parentId)].map((reply) => {
+                if (reply.id === commentId) {
+                  return {
+                    ...reply,
+                    likes: reactionType === "like" ? Math.max(0, reply.likes - 1) : reply.likes,
+                    dislikes: reactionType === "dislike" ? Math.max(0, reply.dislikes - 1) : reply.dislikes,
+                  }
+                }
+                return reply
+              })
+            })
+            return newReplies
+          })
+
+          // Remove reaction in database
+          await reviewsService.removeCommentReaction(commentId, user.id)
         } else {
-          // Add or update reaction
-          await reviewsService.upsertCommentReaction(commentId, currentUser.id, reactionType)
-        }
+          // Add or change reaction
+          setUserReactions((prev) => ({
+            ...prev,
+            [`comment_${commentId}`]: reactionType,
+          }))
 
-        // Update comment likes/dislikes count in database
-        const { data: comment } = await supabase
-          .from("review_comments")
-          .select("likes, dislikes")
-          .eq("id", commentId)
-          .single()
+          // Update comment counts in both comments and replies
+          setComments((prev) => {
+            const newComments = { ...prev }
+            Object.keys(newComments).forEach((reviewId) => {
+              newComments[Number(reviewId)] = newComments[Number(reviewId)].map((comment) => {
+                if (comment.id === commentId) {
+                  let newLikes = comment.likes
+                  let newDislikes = comment.dislikes
 
-        if (comment) {
-          let likes = safeNumber(comment.likes, 0)
-          let dislikes = safeNumber(comment.dislikes, 0)
+                  // Remove previous reaction count if any
+                  if (existingReaction === "like") newLikes = Math.max(0, newLikes - 1)
+                  if (existingReaction === "dislike") newDislikes = Math.max(0, newDislikes - 1)
 
-          // Remove previous reaction if exists
-          if (currentReaction === "like") likes = Math.max(0, likes - 1)
-          if (currentReaction === "dislike") dislikes = Math.max(0, dislikes - 1)
+                  // Add new reaction count
+                  if (reactionType === "like") newLikes++
+                  if (reactionType === "dislike") newDislikes++
 
-          // Add new reaction if not removing
-          if (!isRemovingReaction) {
-            if (reactionType === "like") likes++
-            if (reactionType === "dislike") dislikes++
-          }
+                  return {
+                    ...comment,
+                    likes: newLikes,
+                    dislikes: newDislikes,
+                  }
+                }
+                return comment
+              })
+            })
+            return newComments
+          })
 
-          await reviewsService.updateCommentReactionCounts(commentId, likes, dislikes)
+          setReplies((prev) => {
+            const newReplies = { ...prev }
+            Object.keys(newReplies).forEach((parentId) => {
+              newReplies[Number(parentId)] = newReplies[Number(parentId)].map((reply) => {
+                if (reply.id === commentId) {
+                  let newLikes = reply.likes
+                  let newDislikes = reply.dislikes
+
+                  // Remove previous reaction count if any
+                  if (existingReaction === "like") newLikes = Math.max(0, newLikes - 1)
+                  if (existingReaction === "dislike") newDislikes = Math.max(0, newDislikes - 1)
+
+                  // Add new reaction count
+                  if (reactionType === "like") newLikes++
+                  if (reactionType === "dislike") newDislikes++
+
+                  return {
+                    ...reply,
+                    likes: newLikes,
+                    dislikes: newDislikes,
+                  }
+                }
+                return reply
+              })
+            })
+            return newReplies
+          })
+
+          // Update reaction in database
+          await reviewsService.upsertCommentReaction(commentId, user.id, reactionType)
         }
       } catch (error) {
         console.error("Error reacting to comment:", error)
-        // No need to revert optimistic update as it would cause a full re-render
       }
     },
-    [currentUser, userReactions, setUserReactions, setComments],
+    [user, userReactions],
   )
 
-  const value: ReviewsContextType = {
-    reviews,
-    comments,
-    userReactions,
-    isInitialLoading,
-    isSubmitting,
-    commentsLoading,
-    currentUser,
-    userProfile,
-    fetchReviews,
-    fetchComments,
-    submitReview,
-    submitComment,
-    submitReply,
-    reactToReview,
-    reactToComment,
-  }
+  // Fetch comments for a review
+  const fetchComments = useCallback(
+    async (reviewId: number) => {
+      if (!reviewId || comments[reviewId]) return
 
-  return <ReviewsContext.Provider value={value}>{children}</ReviewsContext.Provider>
-}
+      try {
+        const { data, error } = await reviewsService.fetchTopLevelComments(reviewId)
 
-export function useReviews() {
-  const context = useContext(ReviewsContext)
-  if (context === undefined) {
-    throw new Error("useReviews must be used within a ReviewsProvider")
-  }
-  return context
+        if (error) {
+          console.error("Error fetching comments:", error)
+          return
+        }
+
+        setComments((prev) => ({
+          ...prev,
+          [reviewId]: data || [],
+        }))
+
+        // Fetch user reactions to comments if user is logged in
+        if (user && data && data.length > 0) {
+          const commentIds = data.map((comment) => comment.id)
+          const { data: reactionsData, error: reactionsError } = await reviewsService.fetchCommentReactions(user.id)
+
+          if (!reactionsError && reactionsData) {
+            const filteredReactions = reactionsData.filter((reaction) => commentIds.includes(reaction.comment_id))
+
+            if (filteredReactions.length > 0) {
+              setUserReactions((prev) => {
+                const newReactions = { ...prev }
+                filteredReactions.forEach((reaction) => {
+                  newReactions[`comment_${reaction.comment_id}`] = reaction.reaction_type
+                })
+                return newReactions
+              })
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Exception fetching comments:", error)
+      }
+    },
+    [comments, user],
+  )
+
+  // Fetch replies for a comment
+  const fetchReplies = useCallback(
+    async (commentId: number) => {
+      if (!commentId || replies[commentId]) return
+
+      try {
+        const { data, error } = await reviewsService.fetchReplies(commentId)
+
+        if (error) {
+          console.error("Error fetching replies:", error)
+          return
+        }
+
+        setReplies((prev) => ({
+          ...prev,
+          [commentId]: data || [],
+        }))
+
+        // Fetch user reactions to replies if user is logged in
+        if (user && data && data.length > 0) {
+          const replyIds = data.map((reply) => reply.id)
+          const { data: reactionsData, error: reactionsError } = await reviewsService.fetchCommentReactions(user.id)
+
+          if (!reactionsError && reactionsData) {
+            const filteredReactions = reactionsData.filter((reaction) => replyIds.includes(reaction.comment_id))
+
+            if (filteredReactions.length > 0) {
+              setUserReactions((prev) => {
+                const newReactions = { ...prev }
+                filteredReactions.forEach((reaction) => {
+                  newReactions[`comment_${reaction.comment_id}`] = reaction.reaction_type
+                })
+                return newReactions
+              })
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Exception fetching replies:", error)
+      }
+    },
+    [replies, user],
+  )
+
+  // Fetch comments for all reviews
+  useEffect(() => {
+    if (!authInitialized) return
+
+    reviews.forEach((review) => {
+      if (review.id) {
+        fetchComments(review.id)
+      }
+    })
+  }, [reviews, fetchComments, authInitialized])
+
+  return (
+    <ReviewsContext.Provider
+      value={{
+        reviews,
+        comments,
+        replies,
+        isInitialLoading,
+        isSubmitting,
+        currentUser: user,
+        userProfile,
+        userReactions,
+        fetchReviews,
+        submitReview,
+        submitComment,
+        reactToReview,
+        reactToComment,
+      }}
+    >
+      {children}
+    </ReviewsContext.Provider>
+  )
 }

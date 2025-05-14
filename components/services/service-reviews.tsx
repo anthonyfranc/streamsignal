@@ -17,6 +17,7 @@ import { AuthButton } from "@/components/auth/auth-button"
 import { cn } from "@/lib/utils"
 import { ReviewsProvider, useReviews } from "@/contexts/reviews-context"
 import { safeInitials, safeFormatDate, safeString, safeNumber, safeGet } from "@/lib/data-safety-utils"
+import { useAuth } from "@/contexts/auth-context"
 
 interface ServiceReviewsProps {
   serviceId: number
@@ -44,6 +45,9 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
     userReactions,
   } = useReviews()
 
+  // Also get auth state directly to ensure we have the latest
+  const { user: authUser, isLoading: isAuthLoading } = useAuth()
+
   const [reviewFilter, setReviewFilter] = useState("all")
   const [userDisplayName, setUserDisplayName] = useState<string>("Anonymous")
 
@@ -61,12 +65,27 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
   const [showReviewForm, setShowReviewForm] = useState(false)
   const [expandedReviews, setExpandedReviews] = useState<Record<number, boolean>>({})
   const [expandedComments, setExpandedComments] = useState<Record<number, boolean>>({})
+  const [showSkeleton, setShowSkeleton] = useState(true)
 
   // Track if we've already fetched reviews
   const [hasFetchedReviews, setHasFetchedReviews] = useState(false)
 
   // Use ref to track fetched reviews
   const fetchedReviewsRef = useRef<Record<number, boolean>>({})
+
+  // Add a timeout to hide the skeleton after a maximum time
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowSkeleton(false)
+    }, 3000) // 3 seconds max loading time
+
+    if (!isInitialLoading && !isAuthLoading) {
+      setShowSkeleton(false)
+      clearTimeout(timer)
+    }
+
+    return () => clearTimeout(timer)
+  }, [isInitialLoading, isAuthLoading])
 
   // Fetch reviews only once when component mounts or when serviceId changes
   useEffect(() => {
@@ -80,14 +99,17 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
 
   // Update user display name when currentUser changes
   useEffect(() => {
-    if (currentUser) {
+    // Use either the context user or the direct auth user
+    const user = currentUser || authUser
+
+    if (user) {
       try {
         // Safely extract display name
         const displayName =
           safeGet(userProfile, "display_name", null) ||
-          safeGet(currentUser, "user_metadata.full_name", null) ||
-          safeGet(currentUser, "user_metadata.name", null) ||
-          (safeString(currentUser.email) ? safeString(currentUser.email).split("@")[0] : null) ||
+          safeGet(user, "user_metadata.full_name", null) ||
+          safeGet(user, "user_metadata.name", null) ||
+          (safeString(user.email) ? safeString(user.email).split("@")[0] : null) ||
           "Anonymous"
 
         setUserDisplayName(safeString(displayName, "Anonymous"))
@@ -96,7 +118,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
         setUserDisplayName("Anonymous")
       }
     }
-  }, [currentUser, userProfile])
+  }, [currentUser, userProfile, authUser])
 
   // Filter reviews based on selected filter
   const filteredReviews = useMemo(() => {
@@ -118,7 +140,10 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
     async (e: React.FormEvent) => {
       e.preventDefault()
 
-      if (!currentUser) {
+      // Use either the context user or the direct auth user
+      const user = currentUser || authUser
+
+      if (!user) {
         setError("You must be logged in to submit a review")
         return
       }
@@ -168,6 +193,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
     },
     [
       currentUser,
+      authUser,
       rating,
       title,
       content,
@@ -199,10 +225,13 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
   // Handle review reaction
   const handleReviewReaction = useCallback(
     async (reviewId: number, reactionType: string) => {
-      if (!currentUser) return
+      // Use either the context user or the direct auth user
+      const user = currentUser || authUser
+
+      if (!user) return
       await reactToReview(reviewId, reactionType)
     },
-    [currentUser, reactToReview],
+    [currentUser, authUser, reactToReview],
   )
 
   // Format date - with error handling
@@ -226,6 +255,9 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
     )
   }
 
+  // Determine if user is authenticated
+  const isAuthenticated = !!currentUser || !!authUser
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
@@ -238,7 +270,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
           </TabsList>
         </Tabs>
 
-        {currentUser && (
+        {isAuthenticated && (
           <Button
             variant="outline"
             onClick={() => setShowReviewForm(!showReviewForm)}
@@ -250,7 +282,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
         )}
       </div>
 
-      {!currentUser && (
+      {!isAuthenticated && (
         <Card className="bg-muted/30 border-dashed">
           <CardHeader>
             <CardTitle className="text-center">Share Your Experience</CardTitle>
@@ -264,7 +296,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
         </Card>
       )}
 
-      {currentUser && showReviewForm && (
+      {isAuthenticated && showReviewForm && (
         <Card className="border-primary/20 shadow-md">
           <CardHeader className="pb-3">
             <CardTitle>Write a Review</CardTitle>
@@ -275,7 +307,10 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
               <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
                 <Avatar className="h-6 w-6 border shadow-sm">
                   <AvatarImage
-                    src={safeGet(currentUser, "user_metadata.avatar_url", "/placeholder.svg") || "/placeholder.svg"}
+                    src={
+                      safeGet(currentUser || authUser, "user_metadata.avatar_url", "/placeholder.svg") ||
+                      "/placeholder.svg"
+                    }
                     alt={userDisplayName}
                   />
                   <AvatarFallback className="bg-primary/10 text-primary text-xs">
@@ -453,7 +488,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
       )}
 
       <div className="space-y-5">
-        {isInitialLoading ? (
+        {showSkeleton ? (
           renderSkeletons()
         ) : filteredReviews.length === 0 ? (
           <Card className="bg-muted/30 border-dashed">
@@ -467,7 +502,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
               <MessageSquare className="h-16 w-16 text-muted" />
             </CardContent>
             <CardFooter className="flex justify-center">
-              {currentUser ? (
+              {isAuthenticated ? (
                 <Button
                   variant="outline"
                   onClick={() => setShowReviewForm(true)}
@@ -658,12 +693,12 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
                               : "text-muted-foreground hover:text-primary",
                           )}
                           onClick={() => handleReviewReaction(reviewId, "like")}
-                          disabled={isOptimistic}
+                          disabled={isOptimistic || !isAuthenticated}
                         >
                           <ThumbsUp
                             className={cn("h-4 w-4", getUserReactionToReview(reviewId) === "like" && "fill-primary")}
                           />
-                          <span>Helpful{likes > 0 && ` (${likes})`}</span>
+                          <span>{likes > 0 ? `${likes}` : ""}</span>
                         </button>
                         <button
                           className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-primary transition-colors"
