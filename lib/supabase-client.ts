@@ -9,13 +9,11 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error("Missing Supabase environment variables")
 }
 
-// Create a single supabase client for browser-side usage with consistent storage key
+// Create a single supabase client for browser-side usage
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
-    // Use the default Supabase storage key to avoid conflicts
-    // This is the key that Supabase uses by default
-    storageKey: "sb-" + supabaseUrl.split("//")[1].split(".")[0] + "-auth-token",
+    storageKey: "supabase_auth_token",
     autoRefreshToken: true,
     detectSessionInUrl: true,
   },
@@ -26,13 +24,17 @@ export const supabaseBrowser = supabase
 
 // Create a single supabase client for server components
 const createServerClient = () => {
+  // Use NEXT_PUBLIC_SUPABASE_URL instead of SUPABASE_URL
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL as string
+  // Use SUPABASE_SERVICE_ROLE_KEY if available, otherwise fall back to NEXT_PUBLIC_SUPABASE_ANON_KEY
   const supabaseServiceKey = (process.env.SUPABASE_SERVICE_ROLE_KEY ||
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) as string
 
   if (!supabaseUrl || !supabaseServiceKey) {
-    console.error("Missing Supabase environment variables for server client")
-    throw new Error("Missing Supabase environment variables for server client")
+    console.error("Missing Supabase environment variables for server client:", {
+      hasUrl: !!supabaseUrl,
+      hasServiceKey: !!supabaseServiceKey,
+    })
   }
 
   return createClient(supabaseUrl, supabaseServiceKey)
