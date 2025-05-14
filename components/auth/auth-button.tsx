@@ -16,9 +16,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useRouter } from "next/navigation"
-import { supabase } from "@/lib/supabase"
+import { supabase } from "@/lib/supabase-client"
 
-export function AuthButton() {
+export function AuthButton({ defaultTab = "signin" }: { defaultTab?: "signin" | "signup" }) {
   const [isOpen, setIsOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -83,7 +83,9 @@ export function AuthButton() {
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogTrigger asChild>
-        <Button variant="outline">Sign In</Button>
+        <Button variant="outline" size="sm" className="hidden md:flex">
+          Log in
+        </Button>
       </DialogTrigger>
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
@@ -91,7 +93,7 @@ export function AuthButton() {
           <DialogDescription>Sign in or create an account to submit reviews and comments.</DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue="signin" className="w-full">
+        <Tabs defaultValue={defaultTab} className="w-full">
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="signin">Sign In</TabsTrigger>
             <TabsTrigger value="signup">Sign Up</TabsTrigger>
@@ -142,6 +144,7 @@ export function AuthButton() {
 
 export function UserMenu({ user }: { user: any }) {
   const router = useRouter()
+  const [isMenuOpen, setIsMenuOpen] = useState(false)
 
   const handleSignOut = async () => {
     await supabase.auth.signOut()
@@ -149,11 +152,15 @@ export function UserMenu({ user }: { user: any }) {
   }
 
   return (
-    <div className="flex items-center gap-2">
-      <span className="text-sm">{user.user_metadata?.full_name || user.email}</span>
-      <Button variant="outline" size="sm" onClick={handleSignOut}>
-        Sign Out
-      </Button>
+    <div className="relative flex items-center gap-2">
+      <div className="flex items-center gap-2">
+        <span className="hidden text-sm md:inline-block">
+          {user.user_metadata?.full_name || user.email?.split("@")[0]}
+        </span>
+        <Button variant="outline" size="sm" onClick={handleSignOut}>
+          Sign Out
+        </Button>
+      </div>
     </div>
   )
 }

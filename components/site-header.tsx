@@ -1,7 +1,11 @@
+"use client"
+
 import Link from "next/link"
+import { useState, useEffect } from "react"
 
 import { MegaMenu } from "@/components/mega-menu"
-import { Button } from "@/components/ui/button"
+import { AuthButton, UserMenu } from "@/components/auth/auth-button"
+import { supabase } from "@/lib/supabase-client"
 
 // Define the props interface
 interface SiteHeaderProps {
@@ -10,6 +14,34 @@ interface SiteHeaderProps {
 }
 
 export function SiteHeader({ featuredServices = [], featuredChannels = [] }: SiteHeaderProps) {
+  const [user, setUser] = useState<any>(null)
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    // Get the initial user state
+    const getInitialUser = async () => {
+      setIsLoading(true)
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      setUser(session?.user || null)
+      setIsLoading(false)
+    }
+
+    getInitialUser()
+
+    // Subscribe to auth changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      setUser(session?.user || null)
+    })
+
+    return () => {
+      subscription.unsubscribe()
+    }
+  }, [])
+
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container flex h-16 items-center">
@@ -23,10 +55,19 @@ export function SiteHeader({ featuredServices = [], featuredChannels = [] }: Sit
             <MegaMenu featuredServices={featuredServices} featuredChannels={featuredChannels} />
           </nav>
           <div className="flex items-center space-x-2">
-            <Button variant="outline" size="sm" className="hidden md:flex">
-              Log in
-            </Button>
-            <Button size="sm">Sign up</Button>
+            {isLoading ? (
+              // Show skeleton loader while checking auth status
+              <div className="h-9 w-16 animate-pulse rounded-md bg-muted"></div>
+            ) : user ? (
+              // Show user menu when logged in
+              <UserMenu user={user} />
+            ) : (
+              // Show login/signup buttons when not logged in
+              <>
+                <AuthButton />
+                <AuthButton defaultTab="signup" />
+              </>
+            )}
           </div>
         </div>
       </div>
