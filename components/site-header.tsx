@@ -46,7 +46,7 @@ export function SiteHeader({ featuredServices = [], featuredChannels = [] }: Sit
         const { data: profile } = await supabase
           .from("user_profiles")
           .select("*")
-          .eq("id", currentUser.id)
+          .eq("user_id", currentUser.id)
           .single()
 
         setUserProfile(profile)
@@ -69,7 +69,7 @@ export function SiteHeader({ featuredServices = [], featuredChannels = [] }: Sit
         const { data: profile } = await supabase
           .from("user_profiles")
           .select("*")
-          .eq("id", currentUser.id)
+          .eq("user_id", currentUser.id)
           .single()
 
         setUserProfile(profile)
@@ -117,6 +117,17 @@ export function SiteHeader({ featuredServices = [], featuredChannels = [] }: Sit
     return email
   }
 
+  // Function to truncate display name if too long
+  const truncateDisplayName = (name: string) => {
+    if (!name) return ""
+
+    if (name.length > 20) {
+      return `${name.substring(0, 17)}...`
+    }
+
+    return name
+  }
+
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container flex h-16 items-center">
@@ -144,7 +155,9 @@ export function SiteHeader({ featuredServices = [], featuredChannels = [] }: Sit
                 <DropdownMenuContent align="end" className="w-56">
                   <DropdownMenuLabel>
                     <div className="flex flex-col space-y-1">
-                      <p className="text-sm font-medium leading-none">{getUserDisplayName()}</p>
+                      <p className="text-sm font-medium leading-none truncate" title={getUserDisplayName()}>
+                        {truncateDisplayName(getUserDisplayName())}
+                      </p>
                       <p className="text-xs leading-none text-muted-foreground truncate" title={user.email}>
                         {truncateEmail(user.email)}
                       </p>
