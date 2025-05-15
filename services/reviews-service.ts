@@ -57,12 +57,25 @@ export const reviewsService = {
    * Fetch all replies (comments with parent_comment_id)
    */
   async fetchAllReplies() {
-    return supabase
-      .from("review_comments")
-      .select("*")
-      .is("review_id", null)
-      .not("parent_comment_id", "is", null)
-      .order("created_at", { ascending: true })
+    console.log("Fetching all replies")
+    try {
+      const { data, error } = await supabase
+        .from("review_comments")
+        .select("*")
+        .not("parent_comment_id", "is", null)
+        .order("created_at", { ascending: true })
+
+      if (error) {
+        console.error("Error fetching all replies:", error)
+        return { data: [], error }
+      }
+
+      console.log(`Fetched ${data?.length || 0} total replies`)
+      return { data, error: null }
+    } catch (err) {
+      console.error("Exception in fetchAllReplies:", err)
+      return { data: [], error: err }
+    }
   },
 
   /**

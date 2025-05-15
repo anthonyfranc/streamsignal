@@ -156,7 +156,9 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
   // Get the comments for this review safely
   const reviewComments = useMemo(() => {
     // Safely access comments for this review, returning empty array if undefined
-    return Array.isArray(comments[reviewId]) ? comments[reviewId] : []
+    const commentsList = Array.isArray(comments[reviewId]) ? comments[reviewId] : []
+    console.log(`Comments for review ${reviewId}:`, commentsList.length)
+    return commentsList
   }, [comments, reviewId])
 
   // Safely check loading state

@@ -97,6 +97,13 @@ export function buildCommentTree(
   allReplies: any[],
   userReactionsMap: Record<string, string>,
 ): ReviewComment[] {
+  // Safety check for invalid input
+  if (!Array.isArray(topLevelComments)) topLevelComments = []
+  if (!Array.isArray(allReplies)) allReplies = []
+  if (!userReactionsMap) userReactionsMap = {}
+
+  console.log(`Building comment tree: ${topLevelComments.length} top-level comments, ${allReplies.length} replies`)
+
   const commentMap = new Map<number, ReviewComment>()
 
   // First pass: Create all comment objects and store them in the map
@@ -106,15 +113,11 @@ export function buildCommentTree(
     const userReaction = userReactionsMap[`comment_${comment.id}`] || null
     const processedComment = processSafeComment(comment, userReaction) as ReviewComment
 
-    // Calculate nesting level based on parent chain
-    if (comment.parent_comment_id && commentMap.has(comment.parent_comment_id)) {
-      const parent = commentMap.get(comment.parent_comment_id)
-      if (parent) {
-        processedComment.nesting_level = (parent.nesting_level || 1) + 1
-      }
-    } else {
-      processedComment.nesting_level = 1
-    }
+    // Initialize empty replies array to ensure it's never undefined
+    processedComment.replies = []
+
+    // Set default nesting level to 1 (top-level)
+    processedComment.nesting_level = 1
 
     commentMap.set(comment.id, processedComment)
     return processedComment
@@ -131,7 +134,10 @@ export function buildCommentTree(
     if (comment.parent_comment_id && commentMap.has(comment.parent_comment_id)) {
       const parent = commentMap.get(comment.parent_comment_id)
       if (parent) {
-        if (!parent.replies) parent.replies = []
+        // Calculate nesting level based on parent
+        comment.nesting_level = (parent.nesting_level || 1) + 1
+
+        // Add to parent's replies array
         parent.replies.push(comment)
       }
     }
@@ -148,6 +154,7 @@ export function buildCommentTree(
     }
   })
 
+  console.log(`Built comment tree with ${processedTopComments.length} top-level comments`)
   return processedTopComments
 }
 

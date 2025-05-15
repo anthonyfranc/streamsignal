@@ -35,11 +35,11 @@ export const ReviewComment = memo(function ReviewComment({ comment, serviceId, i
   const replyTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const newReplyRef = useRef<HTMLDivElement>(null)
 
-  if (!comment) return null // Safety check
-
   // Safely extract methods and state from context
   const reviewsContext = useReviews()
   const { user: authUser } = useAuth()
+
+  if (!comment) return null // Safety check
 
   // Get values safely with fallbacks
   const submitCommentReply =
@@ -51,8 +51,11 @@ export const ReviewComment = memo(function ReviewComment({ comment, serviceId, i
   const isSubmitting = reviewsContext.isSubmitting || false
 
   // Process replies safely
-  const replies = Array.isArray(comment.replies) ? comment.replies : []
-  const hasReplies = replies.length > 0
+  const replies = useMemo(() => {
+    return Array.isArray(comment.replies) ? comment.replies : []
+  }, [comment.replies])
+
+  const hasReplies = useMemo(() => replies.length > 0, [replies])
   const replyCount = replies.length
 
   // Calculate which replies to show
@@ -68,6 +71,13 @@ export const ReviewComment = memo(function ReviewComment({ comment, serviceId, i
       return []
     }
   }, [hasReachedMaxReplies, replies, showReplies, visibleRepliesCount])
+
+  // Add debug log to trace reply rendering
+  useEffect(() => {
+    if (replies.length > 0) {
+      console.log(`Comment ${comment.id} has ${replies.length} replies, showing ${visibleReplies.length}`)
+    }
+  }, [comment.id, replies.length, visibleReplies.length])
 
   const remainingReplies = Math.max(0, replyCount - visibleReplies.length)
   const hasMoreReplies = remainingReplies > 0
