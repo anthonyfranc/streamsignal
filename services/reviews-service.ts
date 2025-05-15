@@ -9,11 +9,25 @@ export const reviewsService = {
    * Fetch reviews for a specific service
    */
   async fetchReviews(serviceId: number) {
-    return supabase
-      .from("service_reviews")
-      .select("*")
-      .eq("service_id", serviceId)
-      .order("created_at", { ascending: false })
+    console.log(`reviewsService.fetchReviews: Fetching reviews for service ${serviceId}`)
+    try {
+      const { data, error } = await supabase
+        .from("service_reviews")
+        .select("*")
+        .eq("service_id", serviceId)
+        .order("created_at", { ascending: false })
+
+      if (error) {
+        console.error("Error in reviewsService.fetchReviews:", error)
+        return { data: [], error }
+      }
+
+      console.log(`reviewsService.fetchReviews: Fetched ${data?.length || 0} reviews for service ${serviceId}`)
+      return { data, error: null }
+    } catch (err) {
+      console.error("Exception in reviewsService.fetchReviews:", err)
+      return { data: [], error: err }
+    }
   },
 
   /**
@@ -25,6 +39,17 @@ export const reviewsService = {
       .select("*")
       .eq("review_id", reviewId)
       .is("parent_comment_id", null)
+      .order("created_at", { ascending: true })
+  },
+
+  /**
+   * Fetch all replies for a specific comment
+   */
+  async fetchReplies(commentId: number) {
+    return supabase
+      .from("review_comments")
+      .select("*")
+      .eq("parent_comment_id", commentId)
       .order("created_at", { ascending: true })
   },
 

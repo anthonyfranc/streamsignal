@@ -70,6 +70,12 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
   // Track if we've already fetched reviews
   const [hasFetchedReviews, setHasFetchedReviews] = useState(false)
 
+  // Track auth state to refetch on changes
+  const prevAuthStateRef = useRef<{ isAuthenticated: boolean; userId: string | null }>({
+    isAuthenticated: false,
+    userId: null,
+  })
+
   // Use ref to track fetched reviews
   const fetchedReviewsRef = useRef<Record<number, boolean>>({})
 
@@ -87,9 +93,37 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
     return () => clearTimeout(timer)
   }, [isInitialLoading, isAuthLoading])
 
+  // Check for auth state changes
+  useEffect(() => {
+    const isAuthenticated = !!(currentUser || authUser)
+    const userId = (currentUser || authUser)?.id || null
+
+    // If auth state changed, refetch reviews
+    if (prevAuthStateRef.current.isAuthenticated !== isAuthenticated || prevAuthStateRef.current.userId !== userId) {
+      console.log(
+        `Auth state changed. Was: ${prevAuthStateRef.current.isAuthenticated}, Now: ${isAuthenticated}. Refetching reviews.`,
+      )
+
+      // Clear fetched flag
+      fetchedReviewsRef.current = {}
+
+      // Refetch reviews for this service
+      if (serviceId) {
+        setHasFetchedReviews(false)
+        fetchReviews(serviceId).then(() => {
+          setHasFetchedReviews(true)
+        })
+      }
+
+      // Update previous auth state
+      prevAuthStateRef.current = { isAuthenticated, userId }
+    }
+  }, [currentUser, authUser, serviceId, fetchReviews])
+
   // Fetch reviews only once when component mounts or when serviceId changes
   useEffect(() => {
     if (!hasFetchedReviews && !fetchedReviewsRef.current[serviceId]) {
+      console.log(`Initial fetch for reviews of service ${serviceId}`)
       fetchedReviewsRef.current[serviceId] = true
       fetchReviews(serviceId).then(() => {
         setHasFetchedReviews(true)
@@ -122,6 +156,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
 
   // Filter reviews based on selected filter
   const filteredReviews = useMemo(() => {
+    console.log(`Filtering ${reviews?.length || 0} reviews with filter: ${reviewFilter}`)
     return (Array.isArray(reviews) ? reviews : []).filter((review) => {
       if (!review || typeof review !== "object") return false
 
@@ -490,7 +525,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
       <div className="space-y-5">
         {showSkeleton ? (
           renderSkeletons()
-        ) : filteredReviews.length === 0 ? (
+        ) : reviews.length === 0 ? (
           <Card className="bg-muted/30 border-dashed">
             <CardHeader>
               <CardTitle className="text-center">No Reviews Yet</CardTitle>

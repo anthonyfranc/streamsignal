@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { createContext, useContext, useState, useEffect, useCallback } from "react"
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react"
 import { useAuth } from "@/contexts/auth-context"
 import { reviewsService } from "@/services/reviews-service"
 import type { ServiceReview, ReviewComment } from "@/types/reviews"
@@ -64,10 +64,24 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
   const [authInitialized, setAuthInitialized] = useState(false)
   const [commentsLoading, setCommentsLoading] = useState<Record<number, boolean>>({})
 
+  // Store current service ID to prevent data loss on auth changes
+  const currentServiceIdRef = useRef<number | null>(null)
+  const authChangedRef = useRef(false)
+
   // Wait for auth to be initialized before proceeding
   useEffect(() => {
     if (!isAuthLoading && !authInitialized) {
       setAuthInitialized(true)
+    }
+
+    // Track auth changes to trigger refetch
+    if (authInitialized && !isAuthLoading) {
+      authChangedRef.current = true
+
+      // If we have a stored service ID, we should refetch reviews after auth state changes
+      if (currentServiceIdRef.current !== null) {
+        fetchReviews(currentServiceIdRef.current)
+      }
     }
   }, [isAuthLoading, authInitialized])
 
@@ -76,8 +90,13 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
     async (serviceId: number) => {
       if (!serviceId) return
 
+      // Store current service ID for potential refetches
+      currentServiceIdRef.current = serviceId
+
       try {
         setIsInitialLoading(true)
+        console.log(`Fetching reviews for service ${serviceId}, user: ${user?.id || "unauthenticated"}`)
+
         const { data: reviewsData, error: reviewsError } = await reviewsService.fetchReviews(serviceId)
 
         if (reviewsError) {
@@ -85,11 +104,15 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
           return
         }
 
-        setReviews(reviewsData || [])
+        console.log(`Found ${reviewsData?.length || 0} reviews for service ${serviceId}`)
+
+        // Ensure we always set reviews, even if the data is empty
+        const safeReviewsData = reviewsData || []
+        setReviews(safeReviewsData)
 
         // Fetch user reactions if user is logged in
         if (user) {
-          const reviewIds = (reviewsData || []).map((review) => review.id).filter(Boolean)
+          const reviewIds = safeReviewsData.map((review) => review.id).filter(Boolean)
 
           if (reviewIds.length > 0) {
             try {
@@ -686,7 +709,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
     if (!authInitialized) return
 
     reviews.forEach((review) => {
-      if (review.id) {
+      if (review && review.id) {
         fetchComments(review.id)
       }
     })
