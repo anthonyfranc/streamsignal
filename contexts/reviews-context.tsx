@@ -68,6 +68,12 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
   const currentServiceIdRef = useRef<number | null>(null)
   const authChangedRef = useRef(false)
 
+  // Track fetch status to prevent duplicate fetches
+  const fetchingRef = useRef(false)
+
+  // Track last fetch time to prevent excessive fetches
+  const lastFetchTimeRef = useRef<Record<number, number>>({})
+
   // Wait for auth to be initialized before proceeding
   useEffect(() => {
     if (!isAuthLoading && !authInitialized) {
@@ -89,6 +95,24 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
   const fetchReviews = useCallback(
     async (serviceId: number) => {
       if (!serviceId) return
+
+      // Prevent concurrent fetches for the same service
+      if (fetchingRef.current) {
+        console.log(`Already fetching reviews, skipping fetch for service ${serviceId}`)
+        return
+      }
+
+      // Prevent excessive fetches (no more than once every 2 seconds per service)
+      const now = Date.now()
+      const lastFetchTime = lastFetchTimeRef.current[serviceId] || 0
+      if (now - lastFetchTime < 2000) {
+        console.log(`Throttling fetch for service ${serviceId}, last fetch was ${now - lastFetchTime}ms ago`)
+        return
+      }
+
+      // Update fetch tracking
+      fetchingRef.current = true
+      lastFetchTimeRef.current[serviceId] = now
 
       // Store current service ID for potential refetches
       currentServiceIdRef.current = serviceId
@@ -139,6 +163,7 @@ export function ReviewsProvider({ children }: { children: React.ReactNode }) {
         console.error("Exception fetching reviews:", error)
       } finally {
         setIsInitialLoading(false)
+        fetchingRef.current = false
       }
     },
     [user],

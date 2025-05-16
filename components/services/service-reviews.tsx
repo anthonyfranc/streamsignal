@@ -70,6 +70,12 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
   // Track if we've already fetched reviews
   const [hasFetchedReviews, setHasFetchedReviews] = useState(false)
 
+  // Track fetch attempts to prevent infinite loops
+  const fetchAttemptsRef = useRef(0)
+
+  // Track the last service ID we fetched for
+  const lastServiceIdRef = useRef<number | null>(null)
+
   // Track auth state to refetch on changes
   const prevAuthStateRef = useRef<{ isAuthenticated: boolean; userId: string | null }>({
     isAuthenticated: false,
@@ -106,30 +112,59 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
 
       // Clear fetched flag
       fetchedReviewsRef.current = {}
+      setHasFetchedReviews(false)
 
-      // Refetch reviews for this service
-      if (serviceId) {
-        setHasFetchedReviews(false)
-        fetchReviews(serviceId).then(() => {
-          setHasFetchedReviews(true)
-        })
-      }
+      // Reset fetch attempts counter
+      fetchAttemptsRef.current = 0
 
       // Update previous auth state
       prevAuthStateRef.current = { isAuthenticated, userId }
     }
-  }, [currentUser, authUser, serviceId, fetchReviews])
+  }, [currentUser, authUser])
 
-  // Fetch reviews only once when component mounts or when serviceId changes
+  // Fetch reviews when component mounts, serviceId changes, or auth state changes
   useEffect(() => {
-    if (!hasFetchedReviews && !fetchedReviewsRef.current[serviceId]) {
-      console.log(`Initial fetch for reviews of service ${serviceId}`)
-      fetchedReviewsRef.current[serviceId] = true
-      fetchReviews(serviceId).then(() => {
-        setHasFetchedReviews(true)
-      })
+    // Skip if we're still loading auth
+    if (isAuthLoading) {
+      console.log("Skipping fetch because auth is still loading")
+      return
     }
-  }, [serviceId, fetchReviews, hasFetchedReviews])
+
+    // Skip if we've already fetched for this service ID and auth state
+    if (hasFetchedReviews && lastServiceIdRef.current === serviceId) {
+      console.log(`Already fetched reviews for service ${serviceId}, skipping`)
+      return
+    }
+
+    // Prevent excessive fetch attempts
+    if (fetchAttemptsRef.current > 5) {
+      console.warn(`Too many fetch attempts (${fetchAttemptsRef.current}), stopping to prevent infinite loop`)
+      return
+    }
+
+    // Increment fetch attempts
+    fetchAttemptsRef.current++
+
+    console.log(`Fetching reviews for service ${serviceId} (attempt ${fetchAttemptsRef.current})`)
+
+    // Set loading state
+    setShowSkeleton(true)
+
+    // Update last service ID
+    lastServiceIdRef.current = serviceId
+
+    // Fetch reviews
+    fetchReviews(serviceId)
+      .then(() => {
+        console.log(`Completed fetch for service ${serviceId}`)
+        setHasFetchedReviews(true)
+        setShowSkeleton(false)
+      })
+      .catch((err) => {
+        console.error(`Error fetching reviews for service ${serviceId}:`, err)
+        setShowSkeleton(false)
+      })
+  }, [serviceId, fetchReviews, isAuthLoading, hasFetchedReviews])
 
   // Update user display name when currentUser changes
   useEffect(() => {
@@ -156,8 +191,12 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
 
   // Filter reviews based on selected filter
   const filteredReviews = useMemo(() => {
-    console.log(`Filtering ${reviews?.length || 0} reviews with filter: ${reviewFilter}`)
-    return (Array.isArray(reviews) ? reviews : []).filter((review) => {
+    // Ensure reviews is an array
+    const reviewsArray = Array.isArray(reviews) ? reviews : []
+
+    console.log(`Filtering ${reviewsArray.length} reviews with filter: ${reviewFilter}`)
+
+    return reviewsArray.filter((review) => {
       if (!review || typeof review !== "object") return false
 
       const reviewRating = safeNumber(review.rating, 0)
@@ -292,6 +331,14 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
 
   // Determine if user is authenticated
   const isAuthenticated = !!currentUser || !!authUser
+
+  // Check if we have reviews to display
+  const hasReviews = Array.isArray(reviews) && reviews.length > 0
+
+  // Debug output
+  console.log(
+    `ServiceReviews render: hasReviews=${hasReviews}, reviews.length=${Array.isArray(reviews) ? reviews.length : "not an array"}, isLoading=${isInitialLoading}, showSkeleton=${showSkeleton}`,
+  )
 
   return (
     <div className="space-y-6">
@@ -525,7 +572,7 @@ function ServiceReviewsContent({ serviceId }: ServiceReviewsProps) {
       <div className="space-y-5">
         {showSkeleton ? (
           renderSkeletons()
-        ) : reviews.length === 0 ? (
+        ) : !hasReviews ? (
           <Card className="bg-muted/30 border-dashed">
             <CardHeader>
               <CardTitle className="text-center">No Reviews Yet</CardTitle>
