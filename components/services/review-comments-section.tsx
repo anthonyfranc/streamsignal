@@ -60,14 +60,17 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
   const commentsContainerRef = useRef<HTMLDivElement>(null)
   const commentInputRef = useRef<HTMLTextAreaElement>(null)
   const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const initialFetchDoneRef = useRef(false)
 
   // Handle fetch comments safely
   const handleFetchComments = useCallback(
     async (reviewId: number) => {
       try {
+        console.log(`ReviewCommentsSection: Fetching comments for review ${reviewId}`)
         // Check if fetchComments exists in the context
         if (typeof fetchComments === "function") {
           await fetchComments(reviewId)
+          initialFetchDoneRef.current = true
         }
       } catch (error) {
         console.error("Error fetching comments:", error)
@@ -158,6 +161,16 @@ export const ReviewCommentsSection = memo(function ReviewCommentsSection({
     // Safely access comments for this review, returning empty array if undefined
     const commentsList = Array.isArray(comments[reviewId]) ? comments[reviewId] : []
     console.log(`Comments for review ${reviewId}:`, commentsList.length)
+
+    // Debug: Log the first few comments with their reply counts
+    if (commentsList.length > 0 && initialFetchDoneRef.current) {
+      commentsList.slice(0, 3).forEach((comment) => {
+        if (comment) {
+          console.log(`Comment ${comment.id} has ${comment.replies?.length || 0} replies`)
+        }
+      })
+    }
+
     return commentsList
   }, [comments, reviewId])
 

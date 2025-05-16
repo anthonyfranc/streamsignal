@@ -35,25 +35,44 @@ export const ReviewComment = memo(function ReviewComment({ comment, serviceId, i
   const replyTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const newReplyRef = useRef<HTMLDivElement>(null)
 
+  // Early return if comment is invalid
+  if (!comment || typeof comment !== "object") {
+    console.error("Invalid comment object provided to ReviewComment:", comment)
+    return null
+  }
+
   // Safely extract methods and state from context
   const reviewsContext = useReviews()
   const { user: authUser } = useAuth()
 
-  if (!comment) return null // Safety check
-
   // Get values safely with fallbacks
   const submitCommentReply =
-    reviewsContext.submitCommentReply || ((formData: FormData) => Promise.resolve({ success: false }))
+    reviewsContext?.submitCommentReply || ((formData: FormData) => Promise.resolve({ success: false }))
   const reactToComment =
-    reviewsContext.reactToComment || ((commentId: number, reactionType: string) => Promise.resolve())
-  const currentUser = reviewsContext.currentUser
-  const userProfile = reviewsContext.userProfile
-  const isSubmitting = reviewsContext.isSubmitting || false
+    reviewsContext?.reactToComment || ((commentId: number, reactionType: string) => Promise.resolve())
+  const currentUser = reviewsContext?.currentUser
+  const userProfile = reviewsContext?.userProfile
+  const isSubmitting = reviewsContext?.isSubmitting || false
 
   // Process replies safely
   const replies = useMemo(() => {
-    return Array.isArray(comment.replies) ? comment.replies : []
-  }, [comment.replies])
+    // Ensure replies is always an array
+    if (!Array.isArray(comment.replies)) {
+      console.warn(`Comment ${comment.id} has invalid replies:`, comment.replies)
+      return []
+    }
+
+    // Filter out any invalid replies
+    const validReplies = comment.replies.filter((reply) => reply && typeof reply === "object" && reply.id)
+
+    if (validReplies.length !== comment.replies.length) {
+      console.warn(
+        `Filtered out ${comment.replies.length - validReplies.length} invalid replies for comment ${comment.id}`,
+      )
+    }
+
+    return validReplies
+  }, [comment.id, comment.replies])
 
   const hasReplies = useMemo(() => replies.length > 0, [replies])
   const replyCount = replies.length
@@ -61,11 +80,9 @@ export const ReviewComment = memo(function ReviewComment({ comment, serviceId, i
   // Calculate which replies to show
   const visibleReplies = useMemo(() => {
     try {
-      return hasReachedMaxReplies
-        ? replies.slice(0, MAX_VISIBLE_REPLIES)
-        : showReplies
-          ? replies.slice(0, visibleRepliesCount)
-          : []
+      if (!showReplies) return []
+
+      return hasReachedMaxReplies ? replies.slice(0, MAX_VISIBLE_REPLIES) : replies.slice(0, visibleRepliesCount)
     } catch (error) {
       console.error("Error calculating visible replies:", error)
       return []
@@ -75,15 +92,24 @@ export const ReviewComment = memo(function ReviewComment({ comment, serviceId, i
   // Add debug log to trace reply rendering
   useEffect(() => {
     if (replies.length > 0) {
-      console.log(`Comment ${comment.id} has ${replies.length} replies, showing ${visibleReplies.length}`)
+      console.log(
+        `Comment ${comment.id} has ${replies.length} replies, showing ${visibleReplies.length}, showReplies=${showReplies}`,
+      )
     }
-  }, [comment.id, replies.length, visibleReplies.length])
+  }, [comment.id, replies.length, visibleReplies.length, showReplies])
+
+  // Auto-expand replies for comments with just a few replies
+  useEffect(() => {
+    if (replies.length > 0 && replies.length <= 3 && !showReplies) {
+      setShowReplies(true)
+    }
+  }, [replies.length, showReplies])
 
   const remainingReplies = Math.max(0, replyCount - visibleReplies.length)
   const hasMoreReplies = remainingReplies > 0
 
   // Format date safely
-  const formattedDate = (() => {
+  const formattedDate = useMemo(() => {
     try {
       if (!comment.created_at) return "recently"
       return formatDistanceToNow(new Date(comment.created_at), { addSuffix: true })
@@ -91,7 +117,7 @@ export const ReviewComment = memo(function ReviewComment({ comment, serviceId, i
       console.error("Error formatting date:", e)
       return "unknown time ago"
     }
-  })()
+  }, [comment.created_at])
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -114,7 +140,7 @@ export const ReviewComment = memo(function ReviewComment({ comment, serviceId, i
     async (e: React.FormEvent) => {
       e.preventDefault()
 
-      // Use either context or direct auth user
+      // Use either context user or direct auth user
       const user = currentUser || authUser
 
       if (!replyContent.trim() || !user || !comment?.id) return
@@ -189,11 +215,22 @@ export const ReviewComment = memo(function ReviewComment({ comment, serviceId, i
 
   // Get user display name and avatar
   const user = currentUser || authUser
-  const userDisplayName =
-    userProfile?.display_name ||
-    user?.user_metadata?.full_name ||
-    user?.user_metadata?.name ||
-    (user?.email ? user.email.split("@")[0] : "Anonymous")
+  const userDisplayName = useMemo(() => {
+    if (!user) return "Anonymous"
+
+    try {
+      return (
+        userProfile?.display_name ||
+        user.user_metadata?.full_name ||
+        user.user_metadata?.name ||
+        (user.email ? user.email.split("@")[0] : "Anonymous")
+      )
+    } catch (error) {
+      console.error("Error getting display name:", error)
+      return "Anonymous"
+    }
+  }, [user, userProfile])
+
   const userAvatar = userProfile?.avatar_url || user?.user_metadata?.avatar_url || "/placeholder.svg"
 
   return (

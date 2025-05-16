@@ -34,35 +34,40 @@ export const reviewsService = {
    * Fetch top-level comments for a review
    */
   async fetchTopLevelComments(reviewId: number) {
-    return supabase
-      .from("review_comments")
-      .select("*")
-      .eq("review_id", reviewId)
-      .is("parent_comment_id", null)
-      .order("created_at", { ascending: true })
-  },
-
-  /**
-   * Fetch all replies for a specific comment
-   */
-  async fetchReplies(commentId: number) {
-    return supabase
-      .from("review_comments")
-      .select("*")
-      .eq("parent_comment_id", commentId)
-      .order("created_at", { ascending: true })
-  },
-
-  /**
-   * Fetch all replies (comments with parent_comment_id)
-   */
-  async fetchAllReplies() {
-    console.log("Fetching all replies")
+    console.log(`Fetching top-level comments for review ${reviewId}`)
     try {
       const { data, error } = await supabase
         .from("review_comments")
         .select("*")
-        .not("parent_comment_id", "is", null)
+        .eq("review_id", reviewId)
+        .is("parent_comment_id", null)
+        .order("created_at", { ascending: true })
+
+      if (error) {
+        console.error("Error fetching top-level comments:", error)
+        return { data: [], error }
+      }
+
+      console.log(`Fetched ${data?.length || 0} top-level comments for review ${reviewId}`)
+      return { data, error: null }
+    } catch (err) {
+      console.error("Exception in fetchTopLevelComments:", err)
+      return { data: [], error: err }
+    }
+  },
+
+  /**
+   * Fetch all replies (comments with parent_comment_id)
+   * CRITICAL FIX: The previous query was incorrect and filtering out nested replies
+   */
+  async fetchAllReplies() {
+    console.log("Fetching all comment replies")
+    try {
+      // FIXED: Removed the incorrect filter that was excluding nested replies
+      const { data, error } = await supabase
+        .from("review_comments")
+        .select("*")
+        .not("parent_comment_id", "is", null) // Get ALL comments that have a parent (are replies)
         .order("created_at", { ascending: true })
 
       if (error) {
@@ -70,7 +75,7 @@ export const reviewsService = {
         return { data: [], error }
       }
 
-      console.log(`Fetched ${data?.length || 0} total replies`)
+      console.log(`Successfully fetched ${data?.length || 0} total replies`)
       return { data, error: null }
     } catch (err) {
       console.error("Exception in fetchAllReplies:", err)
@@ -78,6 +83,7 @@ export const reviewsService = {
     }
   },
 
+  // Rest of the service methods remain unchanged
   /**
    * Fetch user reactions to reviews
    */

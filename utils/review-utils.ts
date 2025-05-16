@@ -37,7 +37,7 @@ export function processSafeComment(comment: any, userReaction: string | null = n
   }
 
   return {
-    id: comment.id !== undefined ? comment.id : 0,
+    id: comment.id !== undefined ? safeNumber(comment.id, 0) : 0,
     review_id: comment.review_id !== null ? safeNumber(comment.review_id, 0) : null,
     parent_comment_id: comment.parent_comment_id !== null ? safeNumber(comment.parent_comment_id, 0) : null,
     user_id: safeString(comment.user_id, ""),
@@ -90,71 +90,130 @@ export function getDisplayNameFromData(user: any, userProfile: any): string {
 
 /**
  * Build a comment tree from flat comment data
- * With improved handling for deeply nested comments
+ * CRITICAL FIX: Complete rewrite of the tree building algorithm
  */
 export function buildCommentTree(
   topLevelComments: any[],
   allReplies: any[],
   userReactionsMap: Record<string, string>,
 ): ReviewComment[] {
-  // Safety check for invalid input
-  if (!Array.isArray(topLevelComments)) topLevelComments = []
-  if (!Array.isArray(allReplies)) allReplies = []
-  if (!userReactionsMap) userReactionsMap = {}
+  console.log(
+    `Building comment tree with ${topLevelComments?.length || 0} top comments and ${allReplies?.length || 0} replies`,
+  )
 
-  console.log(`Building comment tree: ${topLevelComments.length} top-level comments, ${allReplies.length} replies`)
+  // Safety checks for input parameters
+  if (!Array.isArray(topLevelComments)) {
+    console.warn("topLevelComments is not an array, using empty array instead")
+    topLevelComments = []
+  }
 
+  if (!Array.isArray(allReplies)) {
+    console.warn("allReplies is not an array, using empty array instead")
+    allReplies = []
+  }
+
+  if (!userReactionsMap || typeof userReactionsMap !== "object") {
+    console.warn("userReactionsMap is not an object, using empty object instead")
+    userReactionsMap = {}
+  }
+
+  // Create a map to store all comments by ID for quick lookup
   const commentMap = new Map<number, ReviewComment>()
 
-  // First pass: Create all comment objects and store them in the map
-  const processComment = (comment: any) => {
-    if (!comment || !comment.id) return null
+  // Process a comment and add it to the map
+  const processComment = (comment: any): ReviewComment | null => {
+    if (!comment || typeof comment !== "object" || comment.id === undefined) {
+      console.warn("Invalid comment object:", comment)
+      return null
+    }
 
-    const userReaction = userReactionsMap[`comment_${comment.id}`] || null
+    const commentId = safeNumber(comment.id, 0)
+    if (commentId === 0) {
+      console.warn("Comment has invalid ID:", comment)
+      return null
+    }
+
+    // If we've already processed this comment, return the existing one
+    if (commentMap.has(commentId)) {
+      return commentMap.get(commentId) || null
+    }
+
+    const userReaction = userReactionsMap[`comment_${commentId}`] || null
     const processedComment = processSafeComment(comment, userReaction) as ReviewComment
 
-    // Initialize empty replies array to ensure it's never undefined
+    // Ensure replies array is initialized
     processedComment.replies = []
 
-    // Set default nesting level to 1 (top-level)
-    processedComment.nesting_level = 1
+    // Store in map for quick lookup
+    commentMap.set(commentId, processedComment)
 
-    commentMap.set(comment.id, processedComment)
     return processedComment
   }
 
-  // Process top-level comments
-  const processedTopComments = topLevelComments?.map(processComment).filter(Boolean) || []
+  // First pass: Process all comments and add them to the map
+  console.log("Processing top-level comments...")
+  const processedTopComments = topLevelComments.map(processComment).filter(Boolean) as ReviewComment[]
 
-  // Process all replies
-  allReplies?.forEach(processComment)
+  console.log("Processing all replies...")
+  allReplies.forEach(processComment)
 
-  // Second pass: Build the tree structure
+  console.log(`Processed ${commentMap.size} total comments`)
+
+  // Second pass: Build the tree structure by connecting replies to parents
+  console.log("Building comment tree structure...")
   commentMap.forEach((comment) => {
-    if (comment.parent_comment_id && commentMap.has(comment.parent_comment_id)) {
-      const parent = commentMap.get(comment.parent_comment_id)
-      if (parent) {
-        // Calculate nesting level based on parent
-        comment.nesting_level = (parent.nesting_level || 1) + 1
+    const parentId = comment.parent_comment_id
 
-        // Add to parent's replies array
-        parent.replies.push(comment)
-      }
+    // Skip top-level comments (they don't have a parent)
+    if (parentId === null || parentId === undefined) {
+      return
+    }
+
+    // Find the parent comment
+    const parentComment = commentMap.get(parentId)
+    if (!parentComment) {
+      console.warn(`Parent comment ${parentId} not found for comment ${comment.id}`)
+      return
+    }
+
+    // Calculate nesting level based on parent
+    comment.nesting_level = (parentComment.nesting_level || 1) + 1
+
+    // Add this comment to its parent's replies
+    if (!parentComment.replies) {
+      parentComment.replies = []
+    }
+
+    // Avoid duplicate replies
+    if (!parentComment.replies.some((reply) => reply.id === comment.id)) {
+      parentComment.replies.push(comment)
     }
   })
 
-  // Sort replies by creation date (oldest first)
+  // Third pass: Sort replies by creation date
+  console.log("Sorting replies by creation date...")
   commentMap.forEach((comment) => {
     if (comment.replies && comment.replies.length > 0) {
       comment.replies.sort((a, b) => {
-        const dateA = new Date(a.created_at || 0).getTime()
-        const dateB = new Date(b.created_at || 0).getTime()
-        return dateA - dateB
+        try {
+          const dateA = new Date(a.created_at || 0).getTime()
+          const dateB = new Date(b.created_at || 0).getTime()
+          return dateA - dateB
+        } catch (error) {
+          console.error("Error sorting replies:", error)
+          return 0
+        }
       })
     }
   })
 
   console.log(`Built comment tree with ${processedTopComments.length} top-level comments`)
+
+  // Debug: Log the first few top comments with their reply counts
+  processedTopComments.slice(0, 3).forEach((comment) => {
+    console.log(`Top comment ${comment.id} has ${comment.replies?.length || 0} direct replies`)
+  })
+
   return processedTopComments
 }
 
